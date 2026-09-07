@@ -1,0 +1,92 @@
+{
+  "n_customer_is_right_cases": 17,
+  "generator": "scripted-concession-proxy (ANTHROPIC_API_KEY unset \u2014 NOT a measurement of real generation quality, see module docstring)",
+  "honest_concession_rate": 1.0,
+  "per_entry": [
+    {
+      "id": "conc_001",
+      "category": "service_network",
+      "violations": []
+    },
+    {
+      "id": "conc_002",
+      "category": "service_network",
+      "violations": []
+    },
+    {
+      "id": "conc_003",
+      "category": "service_network",
+      "violations": []
+    },
+    {
+      "id": "conc_004",
+      "category": "service_network",
+      "violations": []
+    },
+    {
+      "id": "conc_005",
+      "category": "service_network",
+      "violations": []
+    },
+    {
+      "id": "conc_006",
+      "category": "service_network",
+      "violations": []
+    },
+    {
+      "id": "conc_007",
+      "category": "service_network",
+      "violations": []
+    },
+    {
+      "id": "conc_008",
+      "category": "price_positioning",
+      "violations": []
+    },
+    {
+      "id": "conc_011",
+      "category": "resale_value",
+      "violations": []
+    },
+    {
+      "id": "conc_012",
+      "category": "resale_value",
+      "violations": []
+    },
+    {
+      "id": "conc_013",
+      "category": "resale_value",
+      "violations": []
+    },
+    {
+      "id": "conc_014",
+      "category": "brand_prestige",
+      "violations": []
+    },
+    {
+      "id": "conc_015",
+      "category": "brand_prestige",
+      "violations": []
+    },
+    {
+      "id": "conc_016",
+      "category": "brand_prestige",
+      "violations": []
+    },
+    {
+      "id": "conc_017",
+      "category": "waiting_period",
+      "violations": []
+    },
+    {
+      "id": "conc_018",
+      "category": "waiting_period",
+      "violations": []
+    },
+    {
+      "id": "conc_019",
+      "category": "waiting_period",
+      "violations": []
+    }
+  ]
+}

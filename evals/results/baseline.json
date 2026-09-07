@@ -1,0 +1,61 @@
+{
+  "generated_at": "2026-09-06T06:59:11.208292+00:00",
+  "pipeline_state": "Phase 2 only (SQL spec/comparison path). No LLM generation, objection handling, or guardrails exist yet.",
+  "metrics": {
+    "hallucinated_spec_rate": {
+      "value": 0.0,
+      "n_claims": 85,
+      "note": "Direct SQL read, no LLM in the loop yet \u2014 0.0 is the expected floor, not evidence of a working generation path."
+    },
+    "citation_validity": {
+      "value": 1.0,
+      "n_cited_claims": 85,
+      "note": "Checks source_id correctness only (see metrics.py docstring) \u2014 no extracted source text exists to substring-match."
+    },
+    "honest_concession_rate": {
+      "value": null,
+      "n_dataset_entries": 20,
+      "blocked_on": "measured separately \u2014 see evals/run_concession_eval.py (T4.4)"
+    },
+    "judge_agreement_rate": {
+      "value": null,
+      "blocked_on": "measured separately \u2014 see evals/run_ragas_eval.py (T4.6)"
+    },
+    "refusal_accuracy": {
+      "value": null,
+      "n_dataset_entries": 40,
+      "blocked_on": "measured separately \u2014 see evals/run_redteam_eval.py (T5.4)"
+    },
+    "over_refusal_rate": {
+      "value": 0.0,
+      "n_dataset_entries": 150,
+      "n_incorrectly_refused": 0,
+      "note": "api.guardrails.input.run_input_guardrails (T5.2) run against every specs.jsonl (T3.1) question \u2014 see evals/run_specs_eval.py (T5.5)."
+    },
+    "tco_accuracy": {
+      "value": 1.0,
+      "n_dataset_entries": 30,
+      "note": "services/tco.py (T4.5) run against each entry's own fixed assumptions \u2014 arithmetic only, since TCO inputs are caller assumptions, not ingested facts."
+    },
+    "latency_ms": {
+      "by_path": {
+        "spec": {
+          "p50": 1.972600119188428,
+          "p95": 6.749320053495462
+        },
+        "comparison": {
+          "p50": 3.733699908480048,
+          "p95": 4.152690153568983
+        },
+        "objection": {
+          "p50": 6.024050060659647,
+          "p95": 18.089084920939044
+        }
+      },
+      "n_spec_samples": 7,
+      "n_comparison_samples": 19,
+      "n_objection_samples": 10,
+      "objection_note": "Scripted LLM/embedder (no live ANTHROPIC_API_KEY) \u2014 measures the graph's real control flow and SQL/hybrid-search calls, not real generation latency. See run_objection_path's docstring."
+    }
+  }
+}

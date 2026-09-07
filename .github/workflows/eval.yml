@@ -1,0 +1,68 @@
+name: Evals
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Type check
+        run: mypy .
+
+      - name: Test
+        run: pytest -q
+
+      - name: Base branch results
+        id: base
+        run: |
+          if git show "origin/${{ github.base_ref }}:evals/results/baseline.json" > base_results.json 2>/dev/null; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo '{"metrics": {}}' > base_results.json
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run evals on PR head
+        run: python -m evals.run_eval
+
+      - name: Copy head results
+        run: cp evals/results/baseline.json head_results.json
+
+      - name: Diff metrics
+        id: diff
+        run: |
+          {
+            echo "diff<<EOF"
+            python -m evals.diff_results base_results.json head_results.json
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Post metric diff on PR
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: eval-metrics
+          message: |
+            ### Eval metric diff (base `${{ github.base_ref }}` → this PR)
+
+            ${{ steps.base.outputs.found == 'false' && '_No committed baseline on the base branch — showing PR head results with no prior column to diff against._' || '' }}
+
+            ${{ steps.diff.outputs.diff }}

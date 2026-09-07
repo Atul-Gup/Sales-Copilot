@@ -12,6 +12,12 @@ dependencies = [
     "pydantic-settings>=2.5",
     "structlog>=24.4",
     "alembic>=1.13",
+    "openpyxl>=3.1",
+    "openai>=1.0",
+    "pgvector>=0.3",
+    "pypdf>=5.0",
+    "rank-bm25>=0.2",
+    "langgraph>=0.2",
 ]
 
 [project.optional-dependencies]
@@ -21,6 +27,7 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
     "pre-commit>=3.8",
+    "types-openpyxl>=3.1",
 ]
 
 [build-system]
@@ -28,11 +35,11 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["api*", "ingest*"]
+include = ["api*", "ingest*", "evals*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
-testpaths = ["api", "ingest"]
+testpaths = ["api", "ingest", "evals"]
 
 [tool.ruff]
 line-length = 100
@@ -46,3 +53,7 @@ select = ["E", "F", "I", "UP", "B"]
 python_version = "3.12"
 strict = true
 files = ["api", "ingest"]
+
+[[tool.mypy.overrides]]
+module = "rank_bm25"
+ignore_missing_imports = true

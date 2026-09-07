@@ -17,6 +17,19 @@ class ServiceCentre(Base):
     source_id: Mapped[int] = mapped_column(ForeignKey("sources.id"), nullable=False)
 
 
+class CityAlias(Base):
+    """Alternate spellings for a canonical city name (Bangalore -> Bengaluru,
+    Gurgaon -> Gurugram, ...), so a lookup by whatever a consultant types
+    still finds service_centres rows stored under the canonical spelling.
+    """
+
+    __tablename__ = "city_aliases"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    alias: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    canonical_city: Mapped[str] = mapped_column(String, nullable=False)
+
+
 class ResaleEstimate(Base):
     __tablename__ = "resale_estimates"
 

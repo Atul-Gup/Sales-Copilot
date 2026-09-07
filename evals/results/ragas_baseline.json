@@ -1,0 +1,264 @@
+{
+  "n_entries": 30,
+  "n_document_track": 15,
+  "n_objection_track": 15,
+  "judge": "deterministic-lexical-overlap-proxy (see ragas_metrics.py module docstring \u2014 NOT the ragas PyPI package's LLM-judged scores)",
+  "judge_agreement_rate": 0.675,
+  "agreement_tolerance": 0.15,
+  "metrics_overall": {
+    "faithfulness": 0.7333333333333333,
+    "answer_relevancy": 0.24313011063011059,
+    "context_precision": 0.8555555555555555,
+    "context_recall": 1.0
+  },
+  "metrics_by_track": {
+    "document": {
+      "faithfulness": 1.0,
+      "answer_relevancy": 0.2582178932178932,
+      "context_precision": 0.7999999999999999,
+      "context_recall": 1.0
+    },
+    "objection": {
+      "faithfulness": 0.4666666666666667,
+      "answer_relevancy": 0.22804232804232807,
+      "context_precision": 0.9111111111111112,
+      "context_recall": 1.0
+    }
+  },
+  "disagreements": [
+    {
+      "id": "ragas_doc_01",
+      "metric": "answer_relevancy",
+      "computed": 0.455,
+      "hand_label": 0.8
+    },
+    {
+      "id": "ragas_doc_01",
+      "metric": "context_precision",
+      "computed": 0.333,
+      "hand_label": 1.0
+    },
+    {
+      "id": "ragas_doc_02",
+      "metric": "answer_relevancy",
+      "computed": 0.25,
+      "hand_label": 0.8
+    },
+    {
+      "id": "ragas_doc_02",
+      "metric": "context_precision",
+      "computed": 0.333,
+      "hand_label": 1.0
+    },
+    {
+      "id": "ragas_doc_03",
+      "metric": "answer_relevancy",
+      "computed": 0.5,
+      "hand_label": 0.8
+    },
+    {
+      "id": "ragas_doc_04",
+      "metric": "faithfulness",
+      "computed": 1.0,
+      "hand_label": 0.5
+    },
+    {
+      "id": "ragas_doc_04",
+      "metric": "answer_relevancy",
+      "computed": 0.091,
+      "hand_label": 0.8
+    },
+    {
+      "id": "ragas_doc_05",
+      "metric": "answer_relevancy",
+      "computed": 0.1,
+      "hand_label": 0.8
+    },
+    {
+      "id": "ragas_doc_05",
+      "metric": "context_recall",
+      "computed": 1.0,
+      "hand_label": 0.5
+    },
+    {
+      "id": "ragas_doc_06",
+      "metric": "answer_relevancy",
+      "computed": 0.333,
+      "hand_label": 0.8
+    },
+    {
+      "id": "ragas_doc_07",
+      "metric": "answer_relevancy",
+      "computed": 0.111,
+      "hand_label": 0.8
+    },
+    {
+      "id": "ragas_doc_08",
+      "metric": "answer_relevancy",
+      "computed": 0.111,
+      "hand_label": 0.8
+    },
+    {
+      "id": "ragas_doc_09",
+      "metric": "faithfulness",
+      "computed": 1.0,
+      "hand_label": 0.5
+    },
+    {
+      "id": "ragas_doc_09",
+      "metric": "answer_relevancy",
+      "computed": 0.125,
+      "hand_label": 0.8
+    },
+    {
+      "id": "ragas_doc_09",
+      "metric": "context_precision",
+      "computed": 0.333,
+      "hand_label": 1.0
+    },
+    {
+      "id": "ragas_doc_10",
+      "metric": "answer_relevancy",
+      "computed": 0.444,
+      "hand_label": 0.8
+    },
+    {
+      "id": "ragas_doc_10",
+      "metric": "context_recall",
+      "computed": 1.0,
+      "hand_label": 0.5
+    },
+    {
+      "id": "ragas_doc_11",
+      "metric": "context_precision",
+      "computed": 0.333,
+      "hand_label": 1.0
+    },
+    {
+      "id": "ragas_doc_12",
+      "metric": "answer_relevancy",
+      "computed": 0.091,
+      "hand_label": 0.8
+    },
+    {
+      "id": "ragas_doc_13",
+      "metric": "answer_relevancy",
+      "computed": 0.0,
+      "hand_label": 0.8
+    },
+    {
+      "id": "ragas_doc_14",
+      "metric": "faithfulness",
+      "computed": 1.0,
+      "hand_label": 0.5
+    },
+    {
+      "id": "ragas_doc_14",
+      "metric": "answer_relevancy",
+      "computed": 0.429,
+      "hand_label": 0.8
+    },
+    {
+      "id": "ragas_doc_14",
+      "metric": "context_precision",
+      "computed": 0.667,
+      "hand_label": 1.0
+    },
+    {
+      "id": "ragas_doc_15",
+      "metric": "answer_relevancy",
+      "computed": 0.167,
+      "hand_label": 0.8
+    },
+    {
+      "id": "ragas_doc_15",
+      "metric": "context_recall",
+      "computed": 1.0,
+      "hand_label": 0.5
+    },
+    {
+      "id": "ragas_obj_05",
+      "metric": "answer_relevancy",
+      "computed": 0.4,
+      "hand_label": 0.7
+    },
+    {
+      "id": "ragas_obj_06",
+      "metric": "answer_relevancy",
+      "computed": 0.0,
+      "hand_label": 0.7
+    },
+    {
+      "id": "ragas_obj_07",
+      "metric": "answer_relevancy",
+      "computed": 0.5,
+      "hand_label": 0.7
+    },
+    {
+      "id": "ragas_obj_08",
+      "metric": "answer_relevancy",
+      "computed": 0.143,
+      "hand_label": 0.7
+    },
+    {
+      "id": "ragas_obj_10",
+      "metric": "faithfulness",
+      "computed": 0.0,
+      "hand_label": 1.0
+    },
+    {
+      "id": "ragas_obj_10",
+      "metric": "answer_relevancy",
+      "computed": 0.0,
+      "hand_label": 0.7
+    },
+    {
+      "id": "ragas_obj_11",
+      "metric": "faithfulness",
+      "computed": 0.0,
+      "hand_label": 1.0
+    },
+    {
+      "id": "ragas_obj_11",
+      "metric": "answer_relevancy",
+      "computed": 0.0,
+      "hand_label": 0.7
+    },
+    {
+      "id": "ragas_obj_12",
+      "metric": "faithfulness",
+      "computed": 0.0,
+      "hand_label": 1.0
+    },
+    {
+      "id": "ragas_obj_12",
+      "metric": "answer_relevancy",
+      "computed": 0.083,
+      "hand_label": 0.7
+    },
+    {
+      "id": "ragas_obj_13",
+      "metric": "faithfulness",
+      "computed": 0.0,
+      "hand_label": 1.0
+    },
+    {
+      "id": "ragas_obj_13",
+      "metric": "answer_relevancy",
+      "computed": 0.0,
+      "hand_label": 0.7
+    },
+    {
+      "id": "ragas_obj_15",
+      "metric": "faithfulness",
+      "computed": 0.0,
+      "hand_label": 1.0
+    },
+    {
+      "id": "ragas_obj_15",
+      "metric": "answer_relevancy",
+      "computed": 0.0,
+      "hand_label": 0.7
+    }
+  ]
+}
