@@ -1,0 +1,147 @@
+{
+  "honest_concession_rate": 1.0,
+  "detection_rate": 1.0,
+  "n": 20,
+  "results": [
+    {
+      "id": "cc_001",
+      "category": "service_network",
+      "detected": "service_network",
+      "conceded_correctly": true,
+      "response": "That's accurate \u2014 Mercedes-Benz has a service centre in Thane and Volvo doesn't currently list one there. Volvo's listed centres in our data are: Bengaluru, Chennai, Hubballi, Hyderabad, Mumbai. Worth checking with the customer which of those is workable, rather than promising coverage that isn't there."
+    },
+    {
+      "id": "cc_002",
+      "category": "service_network",
+      "detected": "service_network",
+      "conceded_correctly": true,
+      "response": "That's accurate \u2014 Audi has a service centre in Pune and Volvo doesn't currently list one there. Volvo's listed centres in our data are: Bengaluru, Chennai, Hubballi, Hyderabad, Mumbai. Worth checking with the customer which of those is workable, rather than promising coverage that isn't there."
+    },
+    {
+      "id": "cc_003",
+      "category": "service_network",
+      "detected": "service_network",
+      "conceded_correctly": true,
+      "response": "That's accurate \u2014 Audi has a service centre in New Delhi and Volvo doesn't currently list one there. Volvo's listed centres in our data are: Bengaluru, Chennai, Hubballi, Hyderabad, Mumbai. Worth checking with the customer which of those is workable, rather than promising coverage that isn't there."
+    },
+    {
+      "id": "cc_004",
+      "category": "service_network",
+      "detected": "service_network",
+      "conceded_correctly": true,
+      "response": "By the numbers we have (Volvo: 5, Mercedes-Benz: 9 centres), Volvo trails Mercedes-Benz in total centre count in this data."
+    },
+    {
+      "id": "cc_005",
+      "category": "service_network",
+      "detected": "service_network",
+      "conceded_correctly": true,
+      "response": "By the numbers we have (Volvo: 5, Audi: 6 centres), Volvo trails Audi in total centre count in this data."
+    },
+    {
+      "id": "cc_006",
+      "category": "service_network",
+      "detected": "service_network",
+      "conceded_correctly": true,
+      "response": "That's accurate \u2014 Mercedes-Benz has a service centre in Thane and Volvo doesn't currently list one there. Volvo's listed centres in our data are: Bengaluru, Chennai, Hubballi, Hyderabad, Mumbai. Worth checking with the customer which of those is workable, rather than promising coverage that isn't there."
+    },
+    {
+      "id": "cc_007",
+      "category": "service_network",
+      "detected": "service_network",
+      "conceded_correctly": true,
+      "response": "By the numbers we have (Volvo: 5, Mercedes-Benz: 9, Audi: 6, BMW: 2 centres), Volvo trails Mercedes-Benz, Audi in total centre count and currently has as many or more listed centres than BMW in this data."
+    },
+    {
+      "id": "cc_008",
+      "category": "resale_value",
+      "detected": "resale_value",
+      "conceded_correctly": true,
+      "response": "That's a fair concern to take seriously \u2014 resale value matters to most buyers. But I don't have any resale-tracking or depreciation data loaded for any brand, so I can't confirm or deny a specific figure or ranking here. Worth flagging to the customer as an open question rather than reassuring them with a number I can't back up."
+    },
+    {
+      "id": "cc_009",
+      "category": "resale_value",
+      "detected": "resale_value",
+      "conceded_correctly": true,
+      "response": "That's a fair concern to take seriously \u2014 resale value matters to most buyers. But I don't have any resale-tracking or depreciation data loaded for any brand, so I can't confirm or deny a specific figure or ranking here. Worth flagging to the customer as an open question rather than reassuring them with a number I can't back up."
+    },
+    {
+      "id": "cc_010",
+      "category": "resale_value",
+      "detected": "resale_value",
+      "conceded_correctly": true,
+      "response": "That's a fair concern to take seriously \u2014 resale value matters to most buyers. But I don't have any resale-tracking or depreciation data loaded for any brand, so I can't confirm or deny a specific figure or ranking here. Worth flagging to the customer as an open question rather than reassuring them with a number I can't back up."
+    },
+    {
+      "id": "cc_011",
+      "category": "resale_value",
+      "detected": "resale_value",
+      "conceded_correctly": true,
+      "response": "That's a fair concern to take seriously \u2014 resale value matters to most buyers. But I don't have any resale-tracking or depreciation data loaded for any brand, so I can't confirm or deny a specific figure or ranking here. Worth flagging to the customer as an open question rather than reassuring them with a number I can't back up."
+    },
+    {
+      "id": "cc_012",
+      "category": "resale_value",
+      "detected": "resale_value",
+      "conceded_correctly": true,
+      "response": "That's a fair concern to take seriously \u2014 resale value matters to most buyers. But I don't have any resale-tracking or depreciation data loaded for any brand, so I can't confirm or deny a specific figure or ranking here. Worth flagging to the customer as an open question rather than reassuring them with a number I can't back up."
+    },
+    {
+      "id": "cc_013",
+      "category": "resale_value",
+      "detected": "resale_value",
+      "conceded_correctly": true,
+      "response": "That's a fair concern to take seriously \u2014 resale value matters to most buyers. But I don't have any resale-tracking or depreciation data loaded for any brand, so I can't confirm or deny a specific figure or ranking here. Worth flagging to the customer as an open question rather than reassuring them with a number I can't back up."
+    },
+    {
+      "id": "cc_014",
+      "category": "resale_value",
+      "detected": "resale_value",
+      "conceded_correctly": true,
+      "response": "That's a fair concern to take seriously \u2014 resale value matters to most buyers. But I don't have any resale-tracking or depreciation data loaded for any brand, so I can't confirm or deny a specific figure or ranking here. Worth flagging to the customer as an open question rather than reassuring them with a number I can't back up."
+    },
+    {
+      "id": "cc_015",
+      "category": "ex30_price_class_gap",
+      "detected": "ex30_price_class_gap",
+      "conceded_correctly": true,
+      "response": "That's a real gap, not a talking point to argue around \u2014 there's no documented German (or other) rival for the EX30 in this corpus at all. The only BMW file obtained was a mislabelled, different-class X1 and was rejected rather than used as a stand-in, so there's no like-for-like comparison to offer, and no pricing document exists for the EX30 or any competitor either. Best to say plainly that no comparison is available rather than reaching for a mismatched one."
+    },
+    {
+      "id": "cc_016",
+      "category": "ex30_price_class_gap",
+      "detected": "ex30_price_class_gap",
+      "conceded_correctly": true,
+      "response": "That's a real gap, not a talking point to argue around \u2014 there's no documented German (or other) rival for the EX30 in this corpus at all. The only BMW file obtained was a mislabelled, different-class X1 and was rejected rather than used as a stand-in, so there's no like-for-like comparison to offer, and no pricing document exists for the EX30 or any competitor either. Best to say plainly that no comparison is available rather than reaching for a mismatched one."
+    },
+    {
+      "id": "cc_017",
+      "category": "ex30_price_class_gap",
+      "detected": "ex30_price_class_gap",
+      "conceded_correctly": true,
+      "response": "That's a real gap, not a talking point to argue around \u2014 there's no documented German (or other) rival for the EX30 in this corpus at all. The only BMW file obtained was a mislabelled, different-class X1 and was rejected rather than used as a stand-in, so there's no like-for-like comparison to offer, and no pricing document exists for the EX30 or any competitor either. Best to say plainly that no comparison is available rather than reaching for a mismatched one."
+    },
+    {
+      "id": "cc_018",
+      "category": "ex30_price_class_gap",
+      "detected": "ex30_price_class_gap",
+      "conceded_correctly": true,
+      "response": "That's a real gap, not a talking point to argue around \u2014 there's no documented German (or other) rival for the EX30 in this corpus at all. The only BMW file obtained was a mislabelled, different-class X1 and was rejected rather than used as a stand-in, so there's no like-for-like comparison to offer, and no pricing document exists for the EX30 or any competitor either. Best to say plainly that no comparison is available rather than reaching for a mismatched one."
+    },
+    {
+      "id": "cc_019",
+      "category": "ex30_price_class_gap",
+      "detected": "ex30_price_class_gap",
+      "conceded_correctly": true,
+      "response": "That's a real gap, not a talking point to argue around \u2014 there's no documented German (or other) rival for the EX30 in this corpus at all. The only BMW file obtained was a mislabelled, different-class X1 and was rejected rather than used as a stand-in, so there's no like-for-like comparison to offer, and no pricing document exists for the EX30 or any competitor either. Best to say plainly that no comparison is available rather than reaching for a mismatched one."
+    },
+    {
+      "id": "cc_020",
+      "category": "ex30_price_class_gap",
+      "detected": "ex30_price_class_gap",
+      "conceded_correctly": true,
+      "response": "That's a real gap, not a talking point to argue around \u2014 there's no documented German (or other) rival for the EX30 in this corpus at all. The only BMW file obtained was a mislabelled, different-class X1 and was rejected rather than used as a stand-in, so there's no like-for-like comparison to offer, and no pricing document exists for the EX30 or any competitor either. Best to say plainly that no comparison is available rather than reaching for a mismatched one."
+    }
+  ]
+}

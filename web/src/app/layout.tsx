@@ -1,6 +1,5 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import { BottomNav } from "@/components/BottomNav";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -15,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Showroom Copilot",
-  description: "Objection handling and comparisons for the Volvo showroom floor.",
+  description: "Grounded specs, comparisons, and objection handling for the Volvo showroom floor.",
 };
 
 // width=device-width + initial-scale=1 is the baseline for a mobile-first
@@ -33,12 +32,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="flex min-h-full flex-col">
-        {/* pb-16 reserves space for the fixed BottomNav so page content is
-            never rendered underneath it. */}
-        <main className="flex-1 pb-16">{children}</main>
-        <BottomNav />
-      </body>
+      <body className="flex h-full flex-col">{children}</body>
     </html>
   );
 }

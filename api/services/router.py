@@ -77,8 +77,27 @@ def _matches_any(patterns: list[str], text: str) -> bool:
     return any(re.search(p, text) for p in patterns)
 
 
-def _mentioned_entities(text: str) -> set[str]:
-    return {name for name in (*_BRANDS, *_MODELS) if re.search(rf"\b{re.escape(name)}\b", text)}
+_MODEL_SPACING_RE = re.compile(r"(?<=[a-z])\s+(?=\d)")
+
+
+def normalize_model_spacing(text: str) -> str:
+    """Collapse a space between a model's letter prefix and its digits
+    ("ex 30" -> "ex30", "xc 60" -> "xc60") so matching is robust to how a
+    consultant naturally types it — a real user report ("What is power of
+    ex 30" was wrongly refused as out-of-scope) found this gap. Used here
+    and in `api/guardrails/input.py::check_out_of_scope` before any
+    brand/model regex match.
+    """
+    return _MODEL_SPACING_RE.sub("", text)
+
+
+def mentioned_entities(text: str) -> set[str]:
+    """Public: also used by `api/services/pipeline.py::refuse_gracefully`
+    to name what's missing rather than refusing silently."""
+    normalized = normalize_model_spacing(text)
+    return {
+        name for name in (*_BRANDS, *_MODELS) if re.search(rf"\b{re.escape(name)}\b", normalized)
+    }
 
 
 def classify(query: str) -> QueryType:
@@ -92,7 +111,7 @@ def classify(query: str) -> QueryType:
     if _matches_any(_OBJECTION_PATTERNS, text):
         return QueryType.OBJECTION
 
-    if _matches_any(_COMPARISON_PATTERNS, text) or len(_mentioned_entities(text)) >= 2:
+    if _matches_any(_COMPARISON_PATTERNS, text) or len(mentioned_entities(text)) >= 2:
         return QueryType.COMPARISON
 
     return QueryType.SPEC

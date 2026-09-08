@@ -16,12 +16,22 @@ COPY ingest ./ingest
 COPY evals ./evals
 COPY migrations ./migrations
 COPY alembic.ini ./
+COPY scripts ./scripts
+# The source PDFs/spreadsheets POST /admin/ingest (T7.4) reads — this is the
+# only place that can reach the database's internal hostname, so ingestion
+# has to happen from inside this image rather than from a local machine.
+# Only the two subdirectories ingest/product_docs.py and
+# ingest/service_centres.py actually read — data/sources/_archive (superseded
+# source PDFs, docs/CORPUS.md) is 90MB of dead weight this image never needs.
+COPY data/sources/products ./data/sources/products
+COPY ["data/sources/service centres", "./data/sources/service centres"]
 
 RUN pip install --no-cache-dir .
 
 EXPOSE 8000
 
-# Run migrations against whatever DATABASE_URL is configured, then start the
-# API. `alembic upgrade head` is a no-op when already current, so this is
-# safe to run on every boot rather than needing a separate release step.
-CMD ["sh", "-c", "alembic upgrade head && uvicorn api.main:app --host 0.0.0.0 --port 8000"]
+# scripts/bootstrap_db.py runs `alembic upgrade head` (a no-op once already
+# current) and only falls back to resetting alembic's tracking table if that
+# fails — see that script's docstring for why a plain `alembic upgrade head`
+# alone isn't safe here on this database.
+CMD ["sh", "-c", "python -m scripts.bootstrap_db && uvicorn api.main:app --host 0.0.0.0 --port 8000"]

@@ -21,17 +21,28 @@ from __future__ import annotations
 
 import math
 import re
+import time
 from dataclasses import dataclass
 
+import structlog
 from rank_bm25 import BM25Okapi
 from sqlalchemy.orm import Session
 
 from api.llm.embeddings import EmbeddingClient
 from api.models import Chunk
 
+logger = structlog.get_logger(__name__)
+
 # Conventional RRF constant — de-emphasises differences deep in a rank list
 # while still rewarding a top position; not tuned against this corpus yet.
 RRF_K = 60
+
+# T3.6's calibration finding: this is the best point on a poorly-separated
+# curve, not a well-calibrated threshold — the fused RRF score doesn't
+# separate in-corpus from out-of-corpus smoothly without a reranker (see
+# docs/RETRIEVAL.md's "T3.6 finding" and evals/results/threshold_calibration
+# .md). Revisit if reranking (T2.2) is ever revisited.
+IN_CORPUS_THRESHOLD = 0.031778
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
@@ -133,8 +144,15 @@ def hybrid_search_scored(
     against (docs/RETRIEVAL.md), since T2.2 dropped the cross-encoder
     reranker that would otherwise have supplied one.
     """
+    start = time.perf_counter()
     chunks = session.query(Chunk).all()
     if not chunks:
+        logger.info(
+            "retrieval",
+            corpus_size=0,
+            top_score=0.0,
+            latency_ms=(time.perf_counter() - start) * 1000,
+        )
         return []
 
     embedder = embedder if embedder is not None else EmbeddingClient()
@@ -146,4 +164,13 @@ def hybrid_search_scored(
 
     by_id = {chunk.id: chunk for chunk in chunks}
     ranked_ids = sorted(scores, key=lambda item_id: scores[item_id], reverse=True)
-    return [ScoredChunk(chunk=by_id[cid], score=scores[cid]) for cid in ranked_ids[:top_k]]
+    results = [ScoredChunk(chunk=by_id[cid], score=scores[cid]) for cid in ranked_ids[:top_k]]
+
+    logger.info(
+        "retrieval",
+        corpus_size=len(chunks),
+        result_count=len(results),
+        top_score=results[0].score if results else 0.0,
+        latency_ms=(time.perf_counter() - start) * 1000,
+    )
+    return results

@@ -1,8 +1,11 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routers import health
+from api.logging import configure_logging
+from api.routers import admin, chat, health
 from api.settings import settings
+
+configure_logging()
 
 app = FastAPI(title="Showroom Copilot")
 
@@ -14,3 +17,5 @@ app.add_middleware(
 )
 
 app.include_router(health.router)
+app.include_router(chat.router)
+app.include_router(admin.router)

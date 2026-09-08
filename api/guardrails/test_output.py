@@ -38,6 +38,16 @@ def test_uncited_claim() -> None:
     assert check_uncited_claim(good) is None
 
 
+def test_uncited_claim_accepts_the_real_bracket_citation_convention() -> None:
+    """Real user report: a properly `[n]`-cited comparison was refused after
+    two generation attempts because this check's attribution regex only
+    recognized prose phrasing ("per the spec sheet"), never the `[n]`
+    marker every generated response actually uses — see this module's
+    `_ATTRIBUTION_RE` docstring note."""
+    cited = "The XC60 has more boot space than the BMW X3 [4]."
+    assert check_uncited_claim(cited) is None
+
+
 def test_cross_protocol_safety() -> None:
     bad = "The XC60's Euro NCAP score is equivalent to a 5-star Bharat NCAP rating."
     good = "The XC60 scored well under Euro NCAP's 2017 protocol."

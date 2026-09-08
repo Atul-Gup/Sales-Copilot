@@ -25,10 +25,23 @@ each check answers a different question about the same raw request text:
    (docs/CORPUS.md: "EX40 is out of scope — no India brochure was
    available"). Whether we *have data* for an in-scope brand's model is a
    retrieval/abstention concern downstream, not this guardrail's job.
+   Matching normalizes a space between a model's letters and digits
+   (`api/services/router.py::normalize_model_spacing`) before checking —
+   a real user report ("What is power of ex 30" was wrongly refused) found
+   that "ex 30" didn't match the "ex30" token this guardrail looked for.
 
 `run_input_guardrails` runs all three and returns the first rule triggered
 (injection stripping always happens first and does not short-circuit the
 later two checks, since it only sanitizes rather than refuses).
+
+Both blocking messages (`out_of_scope`, `customer_facing`) are deliberately
+the same short, plain line — "I don't have information for this." — rather
+than each explaining its own reasoning (brand/model scope, internal-tool
+policy). Explaining *why* the tool won't answer reads as the system
+defending itself to the consultant rather than just stating the fact;
+keeping both messages identical and terse matches how a consultant actually
+wants to hear it mid-conversation. The distinct `rule_id` on each result is
+still there for logging/debugging — this only changes what the user sees.
 """
 
 from __future__ import annotations
@@ -37,6 +50,7 @@ import re
 from dataclasses import dataclass
 
 from api.guardrails.rules import Action, get_rule
+from api.services.router import normalize_model_spacing
 
 _INJECTION_RE = re.compile(
     r"(ignore (all |the )?(previous|prior|above) instructions"
@@ -124,7 +138,7 @@ def _mentions_any(text_lower: str, terms: frozenset[str]) -> bool:
 
 
 def check_out_of_scope(text: str) -> InputGuardrailResult | None:
-    text_lower = text.lower()
+    text_lower = normalize_model_spacing(text.lower())
     in_scope = _mentions_any(text_lower, IN_SCOPE_BRANDS) or _mentions_any(
         text_lower, IN_SCOPE_MODELS
     )
@@ -135,11 +149,7 @@ def check_out_of_scope(text: str) -> InputGuardrailResult | None:
             rule_id=rule.id,
             action=rule.action,
             sanitized_text=text,
-            message=(
-                "This tool only has grounded data for the Volvo lineup and "
-                "its BMW, Mercedes-Benz, and Audi competitor set — this "
-                "question falls outside that scope."
-            ),
+            message="I don't have information for this.",
         )
     return None
 
@@ -152,11 +162,7 @@ def check_customer_facing(text: str) -> InputGuardrailResult | None:
         rule_id=rule.id,
         action=rule.action,
         sanitized_text=text,
-        message=(
-            "This is an internal consultant tool, not a customer-facing "
-            "drafting tool — it won't produce something to send directly "
-            "to a customer."
-        ),
+        message="I don't have information for this.",
     )
 
 

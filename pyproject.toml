@@ -49,10 +49,22 @@ extend-exclude = ["migrations/versions"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
+[tool.ruff.lint.per-file-ignores]
+# Embeds a full HTML/CSS/JS dashboard page as a Python string literal
+# (api/routers/admin.py::_DASHBOARD_HTML) — line length there follows normal
+# HTML/CSS/JS formatting conventions, not this project's 100-col Python rule.
+"api/routers/admin.py" = ["E501"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection idiom is `param: T = Depends(get_t)` —
+# a call in a default argument that's meant to run once per request, not
+# the mutable-default-argument bug B008 exists to catch.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Header"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["api", "ingest", "evals"]
+files = ["api", "ingest", "evals", "scripts"]
 
 [[tool.mypy.overrides]]
 module = "rank_bm25"

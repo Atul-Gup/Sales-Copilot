@@ -5,7 +5,9 @@ __pycache__
 .mypy_cache
 .ruff_cache
 web
-data
+# NOT "data" — see the Dockerfile's COPY data/... comment (T7.4's
+# POST /admin/ingest needs data/sources/products and .../service centres).
+data/sources/_archive
 evals/results
 .git
 .env

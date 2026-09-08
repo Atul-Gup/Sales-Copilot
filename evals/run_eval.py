@@ -33,18 +33,13 @@ from sqlalchemy.orm import Session
 
 from api.guardrails.input import run_input_guardrails, strip_prompt_injection
 from api.models import Base
-from api.services.retrieve import hybrid_search_scored
+from api.services.retrieve import IN_CORPUS_THRESHOLD, hybrid_search_scored
 from api.services.router import classify
 from evals.metrics import in_corpus_recall, out_of_corpus_refusal_rate, refusal_accuracy
 from ingest.product_docs import run as ingest_product_docs
 
 DATASET_DIR = Path(__file__).parent / "dataset"
 RESULTS_DIR = Path(__file__).parent / "results"
-
-# T3.6's calibration finding: best point on a poorly-separated curve, not a
-# well-calibrated threshold. See docs/RETRIEVAL.md's "T3.6 finding" and
-# evals/results/threshold_calibration.md before trusting this number.
-IN_CORPUS_THRESHOLD = 0.031778
 
 EXCLUDED_OOC_IDS = {"ooc_006"}  # documented EX30 mixed case, see calibrate_threshold.py
 

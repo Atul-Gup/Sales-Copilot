@@ -3,22 +3,22 @@ disparagement, service overstatement, price/promise, staleness, and
 certainty checks (T5.3).
 
 Covers every `OUTPUT_RULES` (T5.1) entry except `must_concede`, which
-`api/objection/verify.py::check_concession` (T4.4) already implements —
-that check needs the objection's retrieved facts and category to do its
-job, so it stays where the objection graph already calls it rather than
-being duplicated here. Every check in this module instead operates on
-plain generated response text (plus, where a rule needs it, a small piece
-of structured context such as a set of known-covered cities or a
-staleness timestamp), so it can run over *any* generated response —
-objection, spec comparison, or battle card — not just the objection
-graph's three-block output.
+`api/services/concede.py` (T4.6) already implements as its own deterministic
+path — a known-weakness objection is answered from real structured data
+before generation ever runs, so there is no generated text for this module
+to check in that case. Every check in this module instead operates on plain
+generated response text (plus, where a rule needs it, a small piece of
+structured context such as a set of known-covered cities or a staleness
+timestamp), so it can run over *any* generated response — SPEC, COMPARISON,
+or OBJECTION — not just one intent class's output.
 
 docs/ARCHITECTURE.md: "Output guardrails run after generation and before
 the response returns. A violation triggers one regeneration attempt, then
-refusal." `run_output_guardrails` returns every violation found in one
-pass; the regenerate-once-then-refuse loop is the caller's job (the same
-shape `api/objection/graph.py`'s `verify_grounding` cycle already uses for
-`must_concede`/grounding).
+refusal." `run_output_guardrails` returns every violation found in one pass;
+the regenerate-once-then-refuse loop is the caller's job — `api/services/
+verify.py`'s `verify_grounding` LangGraph cycle (T4.4) is that caller,
+folding these violations into the same loop it already uses for numeric
+grounding (T5.3).
 """
 
 from __future__ import annotations
@@ -36,8 +36,20 @@ _PROTOCOL_TERMS_RE = re.compile(
 _COMPETITOR_TERMS = ("bmw", "mercedes", "audi", "x3", "glc", "q5", "ix1")
 _COMPARISON_RE = re.compile(r"\b(than|compared to|vs\.?|versus)\b", re.IGNORECASE)
 _NUMBER_RE = re.compile(r"\d")
+# Prose attribution ("per the spec sheet") is one way a claim can be
+# attributed, but `[n]` is the *actual* citation convention every generated
+# response uses (generate.py's prompt asks for it, chat.py's
+# `_referenced_citations` parses it, verify.py's numeric-grounding check
+# relies on it existing) — this regex originally only recognized the prose
+# phrasing, so a properly `[n]`-cited comparison with a competitor mention
+# and no incidental "based on"/"per the" wording anywhere in the response
+# was a false-positive `uncited_claim` violation on every single generation
+# attempt, forcing an otherwise-correct answer into a hard refusal after
+# the regenerate-once loop ran out (real user report: "in what level xc 60
+# is better than x3" refused with a grounding-mismatch message despite every
+# number in the draft actually carrying its own `[n]` marker).
 _ATTRIBUTION_RE = re.compile(
-    r"\b(source|per the|according to|based on|spec sheet|cites?)\b", re.IGNORECASE
+    r"\b(source|per the|according to|based on|spec sheet|cites?)\b|\[\d+\]", re.IGNORECASE
 )
 
 _DISPARAGEMENT_RE = re.compile(
@@ -203,8 +215,7 @@ def check_discount_promise(text: str) -> OutputGuardrailViolation | None:
             rule_id=rule.id,
             action=rule.action,
             message=(
-                "Discounts and finance approval are not the consultant's "
-                "or the tool's authority."
+                "Discounts and finance approval are not the consultant's or the tool's authority."
             ),
         )
     return None

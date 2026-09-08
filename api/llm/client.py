@@ -244,10 +244,11 @@ class LLMClient:
         Deliberately no retry, unlike `complete()`: a stream that fails
         partway through has already shown the caller partial text, so
         restarting it from scratch would either duplicate or contradict
-        what's already been displayed. A caller on a streaming path (see
-        `api/objection/stream.py`) treats a failed stream as a reason to end
-        the response and fall back to a plain refusal, not as a reason to
-        retry from an empty buffer.
+        what's already been displayed. Whatever streaming caller lands in
+        Phase 4/6 (the pre-pivot `api/objection/stream.py` this originally
+        referenced no longer exists — see docs/TASKS.md) should treat a
+        failed stream as a reason to end the response and fall back to a
+        plain refusal, not as a reason to retry from an empty buffer.
         """
         payload: dict[str, object] = {
             "model": model,

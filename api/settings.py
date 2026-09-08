@@ -9,6 +9,11 @@ class Settings(BaseSettings):
     # The Next.js dev server's default origin (T7.1, web/). A deployed
     # frontend origin (T7.4) should be added here, not hardcoded elsewhere.
     cors_allow_origins: list[str] = ["http://localhost:3000"]
+    # Shared secret for POST /admin/ingest (T7.4) — a one-off, idempotent
+    # schema+corpus provisioning call made once after each deploy, not a
+    # general-purpose admin surface. Empty by default so a misconfigured
+    # deploy fails closed rather than exposing the endpoint to anyone.
+    admin_ingest_token: str = ""
 
     @field_validator("database_url")
     @classmethod

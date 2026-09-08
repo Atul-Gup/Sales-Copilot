@@ -2,7 +2,7 @@ import time
 
 import pytest
 
-from api.services.router import QueryType, classify
+from api.services.router import QueryType, classify, mentioned_entities, normalize_model_spacing
 
 LABELLED_QUERIES: list[tuple[str, QueryType]] = [
     # SPEC — single entity or none, plain factual asks
@@ -75,3 +75,21 @@ def test_classify_stays_under_the_latency_budget() -> None:
     classify("Compare the XC60 and the X3 on boot space.")
     elapsed_ms = (time.perf_counter() - start) * 1000
     assert elapsed_ms < 100
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("what is power of ex 30", "what is power of ex30"),
+        ("the xc 60 vs the x 3", "the xc60 vs the x3"),
+        ("no digits here", "no digits here"),
+        ("ex30 already tight", "ex30 already tight"),
+    ],
+)
+def test_normalize_model_spacing(text: str, expected: str) -> None:
+    assert normalize_model_spacing(text) == expected
+
+
+def test_mentioned_entities_tolerates_a_space_before_the_model_digits() -> None:
+    # Real user report: "ex 30" (with a space) wasn't recognised as the EX30.
+    assert mentioned_entities("what is power of ex 30") == {"ex30"}

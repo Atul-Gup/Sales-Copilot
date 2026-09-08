@@ -5,7 +5,12 @@ __pycache__
 .mypy_cache
 .ruff_cache
 web
-data
+# NOT "data" — the deployed API needs data/sources/products and
+# data/sources/service centres to run POST /admin/ingest (T7.4) inside
+# Railway's network, the only place that can reach the database's internal
+# hostname. _archive is the one part of data/ still excluded: 90MB of
+# superseded source PDFs (docs/CORPUS.md) nothing in this repo reads.
+data/sources/_archive
 evals/results
 .git
 .env

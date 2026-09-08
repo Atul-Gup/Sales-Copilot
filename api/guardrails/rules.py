@@ -14,8 +14,8 @@ Two rule tables (`OUTPUT_RULES`, `INPUT_RULES`) mirror the two tables in
 docs/GUARDRAILS.md exactly, so a future doc change is a one-to-one diff
 against this file. `must_concede`'s extra precision (trigger, required
 response shape, good/bad example) lives in docs/GUARDRAILS.md's "The
-concession rule" section and in `api/objection/verify.py::check_concession`
-(T4.4) — this module only carries the row-level fields every rule has.
+concession rule" section and in `api/services/concede.py` (T4.6) — this
+module only carries the row-level fields every rule has.
 """
 
 from __future__ import annotations
