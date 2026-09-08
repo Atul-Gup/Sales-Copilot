@@ -52,7 +52,7 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["api", "ingest"]
+files = ["api", "ingest", "evals"]
 
 [[tool.mypy.overrides]]
 module = "rank_bm25"

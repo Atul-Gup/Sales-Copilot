@@ -2,7 +2,8 @@
 
 *Sales consultant assistant for Volvo Cars India dealerships.*
 
-Status: v1 · Portfolio project, unaffiliated with Volvo Cars
+Status: v2 · Portfolio project, unaffiliated with Volvo Cars
+Supersedes v1 (structured spec database + separate NCAP/warranty corpus + three-screen UI).
 
 ---
 
@@ -10,112 +11,85 @@ Status: v1 · Portfolio project, unaffiliated with Volvo Cars
 
 A Volvo sales consultant is standing beside an XC60 with a customer who has spent three months researching. The customer says: *"The X3 holds its value better and BMW has a service centre in my city. Why would I buy this?"*
 
-The consultant has about ten seconds. They answer from memory, and one of three things goes wrong:
-
-- They overstate — claiming service coverage or resale performance that doesn't hold up, which the customer often already knows is false
-- They understate — failing to quantify a real Volvo advantage, like standard-fit equipment against German options-list pricing
-- They deflect — which reads as evasion and loses the room
-
-The information that would answer this correctly exists across spec sheets, Euro NCAP reports, dealer locators, and price lists. It is not accessible in ten seconds.
+The consultant has about ten seconds. They answer from memory, and one of three things goes wrong: they overstate a claim that doesn't hold up, they understate a real Volvo advantage, or they deflect and lose the room.
 
 ## 2. Who it's for
 
-**Primary user:** a Volvo Cars India sales consultant, on the showroom floor, on their phone, mid-conversation.
-
-**Not built for:** customers. This is an internal tool. Anything customer-facing is a different product with a different risk profile.
+The Volvo Cars India sales consultant, on the showroom floor, on their phone, mid-conversation. Not customer-facing.
 
 ## 3. Why this is hard in a way that matters
 
-**Volvo loses some of these comparisons.** Service network reach, resale value, and brand prestige are genuine weaknesses against BMW and Mercedes in India, not perception problems.
+Volvo genuinely loses some of these comparisons — service network reach and resale value are real weaknesses against BMW and Mercedes in India. A tool that spins them gets caught and abandoned after two uses. **The differentiator is honesty under pressure**: when the customer's objection is factually correct, the system concedes it and gives the consultant something honest to say next. This is measured, not aspirational — see §6.
 
-Every sales-enablement tool is built to help reps win arguments. That's why consultants stop trusting them — the first time it overstates something the consultant knows is false, the tool is dead.
+## 4. Product shape: closed-book chat over a curated document set
 
-**So this product's differentiator is honesty under pressure.** When the customer's objection is factually correct, the system says so and gives the consultant an honest next move. This is a measured behaviour, not an aspiration — see §6.
+**One unified chat interface.** The consultant types a question — spec, comparison, or objection, doesn't matter which — and gets one natural-language answer. There is no separate comparison screen or objection screen; internally the system still classifies intent to choose how to respond, but the consultant never sees that routing.
 
-## 4. Scope
+**The system answers only from documents it has been given**, and says so plainly when it doesn't have something. This is the core discipline: it must never fall back on what the underlying model already knows about Volvo, BMW, or car safety in general. A wrong number is bad. A confidently wrong answer sourced from nowhere is worse, because nothing catches it.
 
-### In scope
+## 5. Scope
 
-- Volvo Cars India's current lineup at variant level
-- BMW, Mercedes-Benz, Audi India direct competitors for each Volvo model
-- Comparison: side-by-side on price, dimensions, powertrain, safety, standard equipment
-- Objection handling: fact, framing, and what must *not* be claimed
-- Five-year total cost of ownership calculation
-- Service network lookup by city
-- Battle cards for the main Volvo-versus-German pairs
+### Corpus — what the system can answer from
 
-### Out of scope for v1
+One reformatted product document per model, competitors included:
+
+| Volvo model | Competitor documents |
+|---|---|
+| XC60 | BMW X3, Mercedes GLC, Audi Q5 |
+| EX30 | *(none — see note)* |
+
+**EX30 has no ingested competitor.** No usable BMW iX1 document was sourced (the only file obtained was a mislabelled BMW X1, a petrol car, and was rejected rather than used). The correct, honest answer to "what competes with the EX30?" is that no German rival exists in its price class — and that answer is itself a useful, true thing to tell a customer. This is documented as a deliberate scope decision in `docs/CORPUS.md`, not a gap to quietly work around.
+
+**Service centre locations** are a second, separate data source — a structured spreadsheet, not a chunked document — checked by direct city lookup. It remains in scope; it was not affected by the corpus simplification below.
+
+### Explicitly out of scope for this version
 
 | Excluded | Why |
 |---|---|
-| Customer-facing chat | Different risk profile, different product |
-| Live dealer inventory | No DMS access; add via MCP later |
-| Lead capture or CRM | Not the problem being solved |
-| Finance and EMI calculation | Requires rates we can't verify |
-| Used cars | Different data, different objections |
-| Voice input | v2 — get the retrieval right first |
+| Euro NCAP safety ratings | Descoped to simplify the corpus to one document type. The system must refuse safety-rating questions rather than answer from general knowledge |
+| Warranty / service-plan terms (any brand) | Same reasoning. India service-plan documentation was never available in any case |
+| Equipped-price comparison (originally scoped as T2.4) | None of the five product documents contain pricing or an itemized standard-vs-optional equipment breakdown — each brochure explicitly disclaims exact tier/price detail. Building this would mean fabricating figures the sources never state, which the closed-book discipline in §4 forbids. The system refuses price and equipment-tier questions via `no_answer_outside_corpus` instead |
+| Customer-facing chat | Different risk profile — this is an internal tool |
+| Live dealer inventory, CRM, finance/EMI, used cars, voice input | Deferred — not needed to demonstrate the core behaviors |
 
-## 5. Core flows
-
-### A. Comparison
-Consultant selects two vehicles. Gets a side-by-side where differences that matter to this segment surface first, every row carrying its source. Target: under 1 second, because these are precomputed.
-
-### B. Objection
-Consultant types or picks an objection. Gets three blocks:
-
-1. **What's true** — with citations
-2. **How to frame it** — coaching, not a script to read aloud
-3. **What not to claim** — the guardrail made visible
-
-Block 3 is the differentiator. Every competitor tells reps what to say; telling them what they can't substantiate is more useful and protects the dealer.
-
-### C. Spec lookup
-Structured question, structured answer, no generation. Under 500ms.
+If NCAP or warranty data proves genuinely necessary (e.g. consultant interviews show it's a constant question), it can be added back as its own document category later. Until then it is a named absence, handled by refusal, not a silent hole.
 
 ## 6. Success metrics
 
 | Metric | Target | Why |
 |---|---|---|
-| **Hallucinated-spec rate** | < 1% | A fabricated spec in front of a customer is the worst failure mode |
-| **Citation validity** | > 98% | Does the cited source actually contain the claim |
-| **Honest-concession rate** | > 90% | On 20 objections where the customer is factually right, does it concede rather than deflect |
-| **Refusal accuracy** | 100% | On the 40-prompt red team set |
-| **Over-refusal rate** | < 5% | A tool too cautious to answer "which has more boot space" is worthless |
-| **p95 latency** | < 2s | The product constraint |
-| TCO accuracy | > 95% | Against 30 hand-computed cases |
+| **Hallucinated-fact rate** | < 1% | A fabricated claim in front of a customer is the worst failure mode |
+| **In-corpus recall** | > 90% | Does it answer when the documents genuinely support an answer |
+| **Out-of-corpus refusal rate** | > 95% | Does it correctly decline when nothing supports an answer — reported as a pair with recall, never alone |
+| **Citation validity** | > 98% | Does the cited passage actually contain the claim |
+| **Honest-concession rate** | > 90% | On objections where the customer is factually right, does it concede rather than deflect. No comparable product measures this |
+| **Refusal accuracy (red team)** | 100% | On the adversarial guardrail set |
+| **Over-refusal rate** | < 5% | Reported beside refusal accuracy always — a tool too cautious to answer "which has more boot space" is useless |
+| p95 latency | < 2s | Every query goes through retrieval and full LLM generation now (no template path) — hit via caching and streaming, not a shortcut around generation |
 | Cost per query | < ₹2 | Dealership economics |
 
-**Honest-concession rate is the headline.** No comparable product measures it. It's the metric that encodes the insight in §3.
-
-**Over-refusal is reported alongside refusal accuracy, always.** Guardrails have a cost and hiding it is dishonest.
+**In-corpus recall / out-of-corpus refusal rate is the new headline pair**, alongside honest-concession rate. Together they measure the two things this version of the product is actually built to prove: it stays inside its evidence, and it tells the truth when the evidence is unflattering.
 
 ## 7. Non-goals
 
-- Not trying to make Volvo win every comparison
-- Not a replacement for product training
-- Not autonomous — it never talks to a customer
-- Not comprehensive across every market or model year
+Not trying to make Volvo win every comparison. Not a replacement for product training. Not autonomous. Not comprehensive across every market, model year, or safety/warranty question — it is honest about what it doesn't cover, which is the point.
 
 ## 8. Risks
 
 | Risk | Mitigation |
 |---|---|
-| Spec data goes stale | `verified_at` on every fact; refuse beyond a staleness threshold |
-| Aggregator sources disagree | Primary sources only, enforced at ingestion |
-| Consultant over-trusts output | Sources visible on every claim; "what not to claim" always shown |
-| Legal exposure from competitor claims | Cite the competitor's own published material; state, never characterise |
-| No Volvo dealer near the builder | Interview German-luxury consultants locally; phone Volvo dealers in Pune or Ahmedabad |
-| Latency creeps up | Precompute battle cards; spec path never touches the LLM |
+| Model answers from general knowledge instead of the documents | `no_answer_outside_corpus` guardrail, tested against `out_of_corpus.jsonl` |
+| Retrieval returns *something* even when nothing is relevant | Calibrated `in_corpus?` threshold, not a default similarity cutoff — see `RETRIEVAL.md` |
+| EX30 has no competitor — feels like a gap | Documented, and turned into the concession behavior ("no direct German rival") rather than hidden |
+| Consultant over-trusts fluent chat prose | Citations and "don't claim" content must stay visually distinct inside the chat response, not dissolve into generic prose |
+| No Volvo dealer near the builder for validation | Interview German-luxury consultants locally, or phone a Volvo dealer in Pune/Ahmedabad |
 
 ## 9. Validation
 
-Before week 7, talk to at least one working luxury-segment sales consultant. Ask what objections they actually get stuck on.
-
-The current objection taxonomy is an assumption. Expect it to be wrong — most likely the real answers are service network, resale, and waiting period rather than specifications. Log what you learn; "informed by interviews with N consultants" is a line very few portfolio projects can write.
+Before finishing the objection layer, talk to at least one working luxury-segment sales consultant about what they actually get stuck on. The current objection set is an assumption and is likely wrong about which objections matter most.
 
 ## 10. Open questions
 
-1. Does variant-level comparison work when Volvo bundles equipment as standard and the Germans sell it as options? The comparison may need to normalise on equipped price, not list price.
-2. How stale is too stale? Prices move; what threshold triggers refusal?
-3. Should the consultant be able to override or correct a fact? Useful, but creates an unverified-data path.
-4. Is TCO credible without verified resale data, or does it need an explicit assumptions panel?
+1. Is warranty/safety data worth adding back once real usage shows it's a constant question?
+2. Should the EX30's "no competitor" framing extend to other price-asymmetric situations if the lineup grows?
+3. Does the calibrated `in_corpus?` threshold hold up once the corpus grows past five documents, or does it need recalibrating per-document?

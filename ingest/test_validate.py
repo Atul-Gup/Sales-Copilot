@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError as PydanticValidationError
 
 from ingest.validate import (
+    ALLOWED_PRODUCT_DOCUMENT_TITLES,
     STALENESS_THRESHOLD,
     FactRecord,
     IngestValidationError,
@@ -19,6 +20,19 @@ def _source(**overrides: object) -> SourceRecord:
         "kind": "oem_site",
         "publisher": "Volvo Cars India",
         "url": "https://www.volvocars.com/in/xc60/specs",
+        "retrieved_at": NOW,
+        "verified_at": NOW,
+    }
+    fields.update(overrides)
+    return SourceRecord(**fields)  # type: ignore[arg-type]
+
+
+def _product_document(**overrides: object) -> SourceRecord:
+    fields: dict[str, object] = {
+        "kind": "product_document",
+        "publisher": "Volvo Cars India",
+        "url": "https://www.volvocars.com/in/xc60",
+        "document_title": "Volvo XC60 product document",
         "retrieved_at": NOW,
         "verified_at": NOW,
     }
@@ -65,3 +79,26 @@ def test_accepts_a_source_right_at_the_staleness_boundary() -> None:
 def test_rejects_a_naive_timestamp_at_construction() -> None:
     with pytest.raises(PydanticValidationError, match="timezone-aware"):
         _source(verified_at=datetime(2026, 9, 3))  # noqa: DTZ001
+
+
+def test_accepts_a_product_document_named_in_corpus_md() -> None:
+    record = FactRecord(source=_product_document())
+    assert validate_fact_record(record, now=NOW) == record.source
+
+
+def test_rejects_a_product_document_not_named_in_corpus_md() -> None:
+    record = FactRecord(source=_product_document(document_title="BMW iX1 product document"))
+    with pytest.raises(IngestValidationError, match="not in docs/CORPUS.md"):
+        validate_fact_record(record, now=NOW)
+
+
+def test_rejects_a_product_document_with_no_title() -> None:
+    record = FactRecord(source=_product_document(document_title=None))
+    with pytest.raises(IngestValidationError, match="not in docs/CORPUS.md"):
+        validate_fact_record(record, now=NOW)
+
+
+def test_every_corpus_document_title_is_accepted() -> None:
+    for title in ALLOWED_PRODUCT_DOCUMENT_TITLES:
+        record = FactRecord(source=_product_document(document_title=title))
+        validate_fact_record(record, now=NOW)

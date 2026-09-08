@@ -38,6 +38,16 @@ class GuardrailRule:
 
 OUTPUT_RULES: tuple[GuardrailRule, ...] = (
     GuardrailRule(
+        id="no_answer_outside_corpus",
+        trigger="The response asserts a claim with no retrieved chunk above the "
+        "calibrated in_corpus? threshold",
+        action="REWRITE",
+        why="The headline rule for this version of the product — nothing in NCAP "
+        "or warranty is ingested, and the system must not fill that gap from "
+        "general knowledge",
+        category="output",
+    ),
+    GuardrailRule(
         id="uncited_claim",
         trigger="Every competitor factual claim carries a source",
         action="REWRITE",
@@ -67,9 +77,10 @@ OUTPUT_RULES: tuple[GuardrailRule, ...] = (
     ),
     GuardrailRule(
         id="on_road_price",
-        trigger="Never state on-road price as fact",
-        action="ANNOTATE",
-        why="Varies by city registration",
+        trigger="Never state on-road (or any) price as fact",
+        action="REFUSE",
+        why="No product document contains pricing data at all (T2.4 descoping) — "
+        "no base figure exists to annotate a caveat onto",
         category="output",
     ),
     GuardrailRule(

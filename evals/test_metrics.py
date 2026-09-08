@@ -1,235 +1,117 @@
-"""Unit tests for evals/metrics.py (T3.5).
-
-Most metrics here score a real pipeline (objection generation, guardrails)
-that doesn't exist yet (T4.x/T5.x). These tests use synthetic fixtures to
-verify each metric's arithmetic is correct in isolation; a few also load the
-real T3.2-T3.4 datasets to prove the functions actually accept that shape of
-data, since that's what run_eval.py (T3.6) will hand them.
-"""
-
-import json
-from pathlib import Path
-from typing import Any
-
 from evals.metrics import (
-    Claim,
-    ConcessionJudgment,
-    GroundTruthFact,
-    GuardrailOutcome,
     LatencySample,
-    citation_validity,
-    hallucinated_spec_rate,
+    citation_validity_rate,
+    hallucinated_fact_rate,
     honest_concession_rate,
-    judge_agreement_rate,
-    latency_percentiles,
+    in_corpus_recall,
+    latency_by_intent,
+    numeric_fidelity_rate,
+    out_of_corpus_refusal_rate,
     over_refusal_rate,
     refusal_accuracy,
-    tco_accuracy,
 )
 
-DATASET_DIR = Path(__file__).parent / "dataset"
 
-
-def _load_jsonl(name: str) -> list[dict[str, Any]]:
-    with (DATASET_DIR / name).open(encoding="utf-8") as f:
-        return [json.loads(line) for line in f if line.strip()]
-
-
-# ---------------------------------------------------------------------------
-# hallucinated_spec_rate / citation_validity
-# ---------------------------------------------------------------------------
-
-FACTS = [
-    GroundTruthFact("XC60 Mild Hybrid", "overall_length_mm", "4708", source_id=1),
-    GroundTruthFact("EX30 Pure Electric", "battery_capacity_kwh", "69", source_id=2),
-]
-
-
-def test_hallucinated_spec_rate_no_claims_is_zero() -> None:
-    assert hallucinated_spec_rate([], FACTS) == 0.0
-
-
-def test_hallucinated_spec_rate_all_grounded() -> None:
-    claims = [Claim("XC60 Mild Hybrid", "overall_length_mm", "4708", cited_source_id=1)]
-    assert hallucinated_spec_rate(claims, FACTS) == 0.0
-
-
-def test_hallucinated_spec_rate_counts_unknown_claims() -> None:
-    claims = [
-        Claim("XC60 Mild Hybrid", "overall_length_mm", "4708", cited_source_id=1),
-        Claim("XC60 Mild Hybrid", "boot_capacity_l", "999", cited_source_id=None),
+def test_numeric_fidelity_rate_perfect_when_all_values_present() -> None:
+    response = "The XC60 has a wheelbase of 2865 mm and a ground clearance of 211 mm."
+    expected = [
+        {"value": "2865", "unit": "mm", "label": "wheelbase"},
+        {"value": "211", "unit": "mm", "label": "ground clearance"},
     ]
-    assert hallucinated_spec_rate(claims, FACTS) == 0.5
+    assert numeric_fidelity_rate(response, expected) == 1.0
 
 
-def test_citation_validity_ignores_uncited_claims() -> None:
-    claims = [Claim("XC60 Mild Hybrid", "boot_capacity_l", "999", cited_source_id=None)]
-    assert citation_validity(claims, FACTS) == 0.0
+def test_numeric_fidelity_rate_catches_a_wrong_number() -> None:
+    response = "The XC60 has a wheelbase of 2800 mm."
+    expected = [{"value": "2865", "unit": "mm", "label": "wheelbase"}]
+    assert numeric_fidelity_rate(response, expected) == 0.0
 
 
-def test_citation_validity_correct_source() -> None:
-    claims = [Claim("XC60 Mild Hybrid", "overall_length_mm", "4708", cited_source_id=1)]
-    assert citation_validity(claims, FACTS) == 1.0
-
-
-def test_citation_validity_wrong_source_id() -> None:
-    claims = [Claim("XC60 Mild Hybrid", "overall_length_mm", "4708", cited_source_id=99)]
-    assert citation_validity(claims, FACTS) == 0.0
-
-
-# ---------------------------------------------------------------------------
-# honest_concession_rate / judge_agreement_rate
-# ---------------------------------------------------------------------------
-
-
-def test_honest_concession_rate_full_marks() -> None:
-    entries = _load_jsonl("concessions.jsonl")
-    judgments = []
-    for entry in entries:
-        shape = entry["expected_response_shape"]
-        judgments.append(
-            ConcessionJudgment(
-                entry_id=entry["id"],
-                acknowledged=shape["must_acknowledge"],
-                stated_figure=shape["must_state_figure"],
-                included_mitigating_fact=shape["must_include_mitigating_fact"],
-                ended_on_deflection=False,
-            )
-        )
-    assert honest_concession_rate(entries, judgments) == 1.0
-
-
-def test_honest_concession_rate_penalises_deflection() -> None:
-    entries = [
-        {
-            "id": "x1",
-            "expected_response_shape": {
-                "must_acknowledge": True,
-                "must_state_figure": True,
-                "must_include_mitigating_fact": True,
-                "must_not_deflect": True,
-            },
-        }
+def test_numeric_fidelity_rate_is_partial_when_some_values_missing() -> None:
+    response = "The XC60 has a wheelbase of 2865 mm."
+    expected = [
+        {"value": "2865", "unit": "mm", "label": "wheelbase"},
+        {"value": "211", "unit": "mm", "label": "ground clearance"},
     ]
-    judgments = [
-        ConcessionJudgment(
-            entry_id="x1",
-            acknowledged=True,
-            stated_figure=True,
-            included_mitigating_fact=True,
-            ended_on_deflection=True,
-        )
-    ]
-    assert honest_concession_rate(entries, judgments) == 0.0
+    assert numeric_fidelity_rate(response, expected) == 0.5
 
 
-def test_honest_concession_rate_missing_judgment_counts_as_failure() -> None:
-    entries = [
-        {
-            "id": "x1",
-            "expected_response_shape": {
-                "must_acknowledge": True,
-                "must_state_figure": False,
-                "must_include_mitigating_fact": False,
-                "must_not_deflect": True,
-            },
-        }
-    ]
-    assert honest_concession_rate(entries, []) == 0.0
+def test_numeric_fidelity_rate_is_vacuously_perfect_with_no_expected_values() -> None:
+    assert numeric_fidelity_rate("no numbers relevant here", []) == 1.0
 
 
-def test_judge_agreement_rate_exact_match() -> None:
-    a = ConcessionJudgment("x1", True, True, True, False)
-    b = ConcessionJudgment("x1", True, True, True, False)
-    assert judge_agreement_rate([a], [b]) == 1.0
+def test_numeric_fidelity_rate_handles_comma_separated_numbers() -> None:
+    response = "The audio system puts out 1,410 W through 15 speakers."
+    expected = [{"value": "1410", "unit": "W", "label": "audio power"}]
+    assert numeric_fidelity_rate(response, expected) == 1.0
 
 
-def test_judge_agreement_rate_disagreement() -> None:
-    a = ConcessionJudgment("x1", True, True, True, False)
-    b = ConcessionJudgment("x1", True, False, True, False)
-    assert judge_agreement_rate([a], [b]) == 0.0
+def test_citation_validity_rate_valid_numeric_citation() -> None:
+    claim = "The XC60's wheelbase is 2865 mm."
+    chunk = "Wheelbase: 2865 mm. Overall length: 4708 mm."
+    assert citation_validity_rate([(claim, chunk)]) == 1.0
 
 
-# ---------------------------------------------------------------------------
-# refusal_accuracy / over_refusal_rate
-# ---------------------------------------------------------------------------
+def test_citation_validity_rate_invalid_numeric_citation() -> None:
+    claim = "The XC60's wheelbase is 2865 mm."
+    chunk = "Overall length: 4708 mm. Boot capacity: not specified."
+    assert citation_validity_rate([(claim, chunk)]) == 0.0
 
 
-def test_refusal_accuracy_on_real_redteam_dataset() -> None:
-    entries = _load_jsonl("redteam.jsonl")
-    outcomes = [
-        GuardrailOutcome(e["id"], e["expected_action"], e["expected_rule"]) for e in entries
-    ]
-    assert refusal_accuracy(entries, outcomes) == 1.0
+def test_citation_validity_rate_non_numeric_claim_falls_back_to_word_overlap() -> None:
+    claim = "The XC60 has a panoramic roof."
+    chunk = "Panoramic roof: shown/described in the interior section."
+    assert citation_validity_rate([(claim, chunk)]) == 1.0
 
 
-def test_refusal_accuracy_wrong_rule_is_not_correct() -> None:
-    entries = [{"id": "r1", "expected_rule": "disparagement", "expected_action": "REWRITE"}]
-    outcomes = [GuardrailOutcome("r1", "REWRITE", "must_concede")]
-    assert refusal_accuracy(entries, outcomes) == 0.0
+def test_citation_validity_rate_empty_list_is_vacuously_perfect() -> None:
+    assert citation_validity_rate([]) == 1.0
 
 
-def test_over_refusal_rate_all_answered() -> None:
-    entries = [{"id": "s1"}, {"id": "s2"}]
-    outcomes = [GuardrailOutcome("s1", "answered", None), GuardrailOutcome("s2", "answered", None)]
-    assert over_refusal_rate(entries, outcomes) == 0.0
+def test_hallucinated_fact_rate_flags_an_unsupported_number() -> None:
+    claims = ["The XC60's wheelbase is 3000 mm."]
+    retrieved = ["Wheelbase: 2865 mm."]
+    assert hallucinated_fact_rate(claims, retrieved) == 1.0
 
 
-def test_over_refusal_rate_counts_refusals_on_legitimate_questions() -> None:
-    entries = [{"id": "s1"}, {"id": "s2"}]
-    outcomes = [
-        GuardrailOutcome("s1", "answered", None),
-        GuardrailOutcome("s2", "REFUSE", "out_of_scope"),
-    ]
-    assert over_refusal_rate(entries, outcomes) == 0.5
+def test_hallucinated_fact_rate_clears_a_supported_number() -> None:
+    claims = ["The XC60's wheelbase is 2865 mm."]
+    retrieved = ["Wheelbase: 2865 mm."]
+    assert hallucinated_fact_rate(claims, retrieved) == 0.0
 
 
-# ---------------------------------------------------------------------------
-# tco_accuracy
-# ---------------------------------------------------------------------------
+def test_hallucinated_fact_rate_is_zero_with_no_claims() -> None:
+    assert hallucinated_fact_rate([], ["some retrieved text"]) == 0.0
 
 
-def test_tco_accuracy_on_real_tco_dataset_within_tolerance() -> None:
-    entries = _load_jsonl("tco.jsonl")
-    # Simulate a pipeline that's off by exactly 1% on every case.
-    computed = {e["id"]: e["five_year_tco_inr"] * 1.01 for e in entries}
-    assert tco_accuracy(entries, computed) == 1.0
+def test_rate_wrappers_compute_a_simple_fraction() -> None:
+    assert in_corpus_recall([True, True, False, True]) == 0.75
+    assert out_of_corpus_refusal_rate([True, True]) == 1.0
+    assert honest_concession_rate([False, False]) == 0.0
+    assert refusal_accuracy([True, False, True, True]) == 0.75
+    assert abs(over_refusal_rate([False, False, True]) - 1 / 3) < 1e-9
 
 
-def test_tco_accuracy_flags_cases_outside_tolerance() -> None:
-    entries = _load_jsonl("tco.jsonl")
-    computed = {e["id"]: e["five_year_tco_inr"] * 1.5 for e in entries}
-    assert tco_accuracy(entries, computed) == 0.0
+def test_rate_wrappers_are_zero_on_empty_input() -> None:
+    assert in_corpus_recall([]) == 0.0
+    assert refusal_accuracy([]) == 0.0
 
 
-def test_tco_accuracy_missing_computed_value_counts_as_failure() -> None:
-    entries = _load_jsonl("tco.jsonl")
-    assert tco_accuracy(entries, {}) == 0.0
-
-
-# ---------------------------------------------------------------------------
-# latency_percentiles
-# ---------------------------------------------------------------------------
-
-
-def test_latency_percentiles_separates_by_path() -> None:
+def test_latency_by_intent_computes_percentiles_per_intent() -> None:
     samples = [
-        LatencySample("spec", 100),
-        LatencySample("spec", 200),
-        LatencySample("objection", 1500),
-        LatencySample("objection", 1900),
+        LatencySample(intent="SPEC", latency_ms=100.0),
+        LatencySample(intent="SPEC", latency_ms=200.0),
+        LatencySample(intent="COMPARISON", latency_ms=500.0),
     ]
-    result = latency_percentiles(samples)
-    assert set(result.keys()) == {"spec", "objection"}
-    assert result["spec"]["p50"] <= result["spec"]["p95"]
-    assert result["objection"]["p50"] > result["spec"]["p95"]
+    result = latency_by_intent(samples)
+    assert set(result.keys()) == {"SPEC", "COMPARISON"}
+    assert result["SPEC"]["mean"] == 150.0
+    assert result["COMPARISON"]["p50"] == 500.0
+    assert result["COMPARISON"]["p95"] == 500.0
 
 
-def test_latency_percentiles_empty_input() -> None:
-    assert latency_percentiles([]) == {}
-
-
-def test_latency_percentiles_single_sample() -> None:
-    result = latency_percentiles([LatencySample("spec", 42)])
-    assert result["spec"]["p50"] == 42
-    assert result["spec"]["p95"] == 42
+def test_latency_by_intent_handles_a_single_sample_per_intent() -> None:
+    samples = [LatencySample(intent="OBJECTION", latency_ms=300.0)]
+    result = latency_by_intent(samples)
+    assert result["OBJECTION"]["p50"] == 300.0
+    assert result["OBJECTION"]["p95"] == 300.0

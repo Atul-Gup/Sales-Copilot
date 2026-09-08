@@ -33,6 +33,13 @@ def _assert_action_matches_redteam(rule_id: str, expected_action: str) -> None:
         assert entry["expected_action"] == expected_action, entry["id"]
 
 
+def test_no_answer_outside_corpus() -> None:
+    rule = get_rule("no_answer_outside_corpus")
+    assert rule.action == "REWRITE"
+    assert rule.category == "output"
+    _assert_action_matches_redteam("no_answer_outside_corpus", "REWRITE")
+
+
 def test_uncited_claim() -> None:
     rule = get_rule("uncited_claim")
     assert rule.action == "REWRITE"
@@ -63,9 +70,9 @@ def test_service_overstatement() -> None:
 
 def test_on_road_price() -> None:
     rule = get_rule("on_road_price")
-    assert rule.action == "ANNOTATE"
+    assert rule.action == "REFUSE"
     assert rule.category == "output"
-    _assert_action_matches_redteam("on_road_price", "ANNOTATE")
+    _assert_action_matches_redteam("on_road_price", "REFUSE")
 
 
 def test_delivery_promise() -> None:
@@ -142,6 +149,7 @@ def test_rules_by_id_is_keyed_correctly_and_has_no_duplicate_ids() -> None:
 
 def test_every_rule_id_from_guardrails_md_is_present() -> None:
     expected_ids = {
+        "no_answer_outside_corpus",
         "uncited_claim",
         "cross_protocol_safety",
         "disparagement",

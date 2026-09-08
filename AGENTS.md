@@ -4,9 +4,7 @@ Rules loaded before every agent task. Keep this file under 12,000 characters.
 
 ## What this project is
 
-An AI assistant for **Volvo Cars India dealership sales consultants**. A consultant standing with a customer asks it for a competitive comparison or help with an objection, and gets a cited, defensible answer in under two seconds.
-
-It competes against BMW, Mercedes-Benz, and Audi in the Indian luxury segment.
+An AI assistant for **Volvo Cars India dealership sales consultants**. A consultant standing with a customer asks a single unified chat interface for a competitive comparison or help with an objection, and gets a natural-language answer grounded only in a small set of curated product documents — with citations and any "what not to claim" content staying visible inside that answer.
 
 **This is an unaffiliated portfolio project built on public information.** Never use Volvo trademarks or logos in the UI. Never imply endorsement or partnership.
 
@@ -14,6 +12,8 @@ It competes against BMW, Mercedes-Benz, and Audi in the Indian luxury segment.
 
 - `docs/PRD.md` — product definition, scope, success metrics
 - `docs/ARCHITECTURE.md` — stack, data model, eval metric definitions
+- `docs/CORPUS.md` — the authoritative, exhaustive source list. If a document isn't listed there, it is not in scope
+- `docs/RETRIEVAL.md` — retrieval and generation design, the `in_corpus?` gate, refusal behaviour
 - `docs/GUARDRAILS.md` — the rules the system must never break
 - `docs/TASKS.md` — sequenced backlog; work one task at a time
 
@@ -21,79 +21,67 @@ It competes against BMW, Mercedes-Benz, and Audi in the Indian luxury segment.
 
 ### 1. Citation is a schema constraint, not a prompt instruction
 
-Every fact row in the database carries a `source_id` referencing the `sources` table. The retrieval API **must not** be able to return a fact without one. Do not add a code path that lets an uncited fact reach the model.
+Every chunk carries a `source_id` referencing the `sources` table. Retrieval **must not** be able to return a chunk without one, and generation must not state a claim with no corresponding retrieved chunk. If you find yourself relying on "please cite your sources" in a prompt as the primary enforcement mechanism, stop — the constraint belongs in the data layer and in `verify_grounding`, not in prose.
 
-If you find yourself writing "please cite your sources" in a prompt as the primary enforcement mechanism, stop — the constraint belongs in the data layer.
+### 2. The system answers only from the documents in CORPUS.md — and says so when it can't
 
-### 2. Spec lookups never touch an LLM
+There is no structured fact database. The corpus is five reformatted product documents (`docs/CORPUS.md`). Every query goes through retrieval; a calibrated `in_corpus?` threshold decides whether to generate an answer or refuse. **When there's no supporting document — safety ratings, warranty, service-plan terms — refuse and name what's missing. Never let the underlying model answer from its own general knowledge.** This is the single most important rule in this codebase. Full design in `docs/RETRIEVAL.md`.
 
-Structured questions ("boot space of the XC60", "which variants have a panoramic roof under ₹70 lakh") resolve as SQL against typed columns. LLM generation is only for objection handling and comparison narrative.
+### 3. Every response is generated, and every number is verified afterward
 
-This is the latency budget. Do not route spec queries through the model for convenience.
+There is no template path anymore — all intent classes (SPEC, COMPARISON, OBJECTION) generate a natural-language response through the LLM, over the retrieved chunks. This is deliberate: a mix of templated and generated replies reads as inconsistent inside a single chat surface.
 
-### 3. Primary sources only
+Because generation is free-form, `verify_grounding` must check **every number and unit stated in the response against its retrieved source value**, exact match or an explicitly stated tolerance — not just check that a claim has *some* supporting chunk. A numeric mismatch (e.g. 483L restated as "around 480L") is a grounding violation with the same regenerate-once-then-refuse handling as an uncited claim. Report **numeric fidelity rate** as its own metric, separate from hallucinated-fact rate — see `docs/RETRIEVAL.md`.
 
-Permitted: Volvo Cars India official site, BMW/Mercedes-Benz/Audi India official sites, Euro NCAP, official homologated range and efficiency figures, Volvo's own dealer and service locator.
+### 4. Primary sources only, and only what's in CORPUS.md
 
-Forbidden: CarWale, CarDekho, ZigWheels, CarTrade, and every other aggregator. They disagree with each other and a consultant quoting them has no defence.
-
-### 4. Never compare across safety protocols
-
-Euro NCAP and Bharat NCAP use different protocols and are not on the same scale. Volvo India is not BNCAP tested. Any request to compare a Euro NCAP score against a BNCAP score must be refused with an explanation, not answered.
+Every document in the corpus is listed by name in `docs/CORPUS.md`. Do not source, ingest, or reference anything not on that list — including anything from aggregators (CarWale, CarDekho, ZigWheels, etc.), which is never permitted regardless of corpus scope.
 
 ### 5. When the customer is right, concede
 
-Volvo genuinely loses on service network reach, resale value, and brand prestige in India. The system must acknowledge valid criticism and give the consultant something honest to say next. Never spin, never deflect, never overstate service coverage.
-
-A tool that claims Volvo wins everything gets caught in two uses and is then never trusted again.
+Volvo genuinely loses on service network reach and resale positioning in India, and the EX30 has no direct German rival at its price. The system must acknowledge this and give the consultant something honest to say next — never spin, never deflect. See `must_concede` in `docs/GUARDRAILS.md`.
 
 ### 6. Never state as fact
 
-- On-road price (varies by city registration — quote ex-showroom and say so)
-- Delivery timelines
-- Discounts or finance approval
-- Service availability in a city without checking the locator data
+On-road price (varies by city — quote ex-showroom and say so), delivery timelines, discounts or finance approval, service availability not confirmed in the service-centre data.
 
 ## Stack
 
 - **Backend:** Python 3.12, FastAPI, SQLAlchemy, Pydantic v2
-- **Database:** PostgreSQL 16 with pgvector. One database — do not add a separate vector store
-- **Frontend:** Next.js (App Router), TypeScript, Tailwind. Mobile-first; consultants use phones
+- **Database:** PostgreSQL 16 with pgvector. One database
+- **Frontend:** Next.js (App Router), TypeScript, Tailwind. Mobile-first; consultants use phones. **Single unified chat interface** — one input, one natural-language response stream. Not separate screens per query type
 - **LLM:** provider-agnostic behind `llm/client.py`. Never import a vendor SDK outside that module
+- **Embeddings:** OpenAI `text-embedding-3-small`, cached, behind `llm/embeddings.py`
+- **Orchestration:** LangGraph, scoped to the retrieve→generate→verify→(regenerate|refuse) cycle — it has a genuine loop. Nothing else needs a graph framework
 - **Evals:** pytest, results committed as JSON under `evals/results/`
-
-Do not add dependencies without a note in the PR description explaining why an existing one won't do.
 
 ## Conventions
 
 - Type hints on every Python function. Pydantic models for all API boundaries
 - No bare `except:`. Every external call has explicit error handling and a timeout
-- Prices stored as integer paise, never floats
-- All timestamps UTC in the database, formatted at the edge
-- Structured logging via `structlog`. Every LLM call logs model, tokens, latency, and cost
+- Prices stored as integer paise, never floats. Price fields are nullable — do not insert a placeholder or estimated price where no source exists
+- Structured logging via `structlog`. Every LLM and embedding call logs model, tokens, latency, and cost
 - Tests alongside code as `test_*.py`. New logic ships with a test
 
 ## What "done" means
 
-A task is not done until:
-
 1. It runs — you executed it, not just wrote it
 2. Tests pass, including the eval suite if you touched the pipeline
 3. New behaviour has a test
-4. If you changed the pipeline, you ran `evals/run_eval.py` and the metrics did not regress
-
-**Report eval deltas in your summary.** "Hallucinated-spec rate 2.1% → 0.9%" is the useful output. "Improved accuracy" is not.
+4. If you touched retrieval or generation, you ran `evals/run_eval.py` and report the metric deltas in your summary — especially in-corpus recall vs out-of-corpus refusal rate, always as a pair
 
 ## What to do when stuck
 
-- **Missing spec data?** Do not invent a plausible figure. Insert a row with `verified = false` and flag it. A wrong spec in front of a customer is the worst failure this system has.
-- **Unclear requirement?** Check `docs/PRD.md`, then ask. Do not guess at product decisions.
-- **Guardrail seems to block something legitimate?** Say so rather than weakening it. Over-refusal is a tracked metric — flag it and let it be a deliberate decision.
+- **A document isn't in `docs/CORPUS.md`?** Don't ingest it. Flag it and stop.
+- **Missing or ambiguous data in a document you're allowed to use?** Don't infer or fill from a related model. Flag it with `verified=false` and the source location.
+- **Unclear requirement?** Check `docs/PRD.md`, then ask.
+- **A guardrail seems to block something legitimate?** Say so rather than weakening it silently. Over-refusal is a tracked metric — flag it and let it be a deliberate, measured decision.
 
 ## Anti-patterns
 
-- Adding a chat interface as the primary UI. This is a fast-lookup tool; chat is a fallback
-- Adding a vector store when Postgres and pgvector already cover it
-- Broadening scope beyond Volvo India's current lineup and the three German competitors
-- Building the objection layer before the eval set exists
+- Recreating structured fact tables (`specs`, `features`, `safety_ratings`) — the corpus is documents now; if this seems necessary, the scope has drifted and `docs/CORPUS.md` needs updating first, not the schema
+- Ingesting anything not named in `docs/CORPUS.md`, including NCAP, warranty, or aggregator data
+- Letting the model answer an out-of-corpus question from general knowledge instead of refusing
+- Letting citations or "don't claim"/concession content dissolve into generic conversational prose in the chat UI
+- Substituting a mismatched document (e.g. the BMW X1) for a missing one (the iX1) rather than leaving the gap honest
 - Marking work complete without running it

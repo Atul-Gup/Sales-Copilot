@@ -85,7 +85,7 @@ def test_on_road_price() -> None:
     bad_result = check_on_road_price(bad)
     assert bad_result is not None
     assert bad_result.rule_id == "on_road_price"
-    assert bad_result.action == "ANNOTATE"
+    assert bad_result.action == "REFUSE"
     assert check_on_road_price(good) is None
 
 

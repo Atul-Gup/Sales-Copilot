@@ -7,6 +7,8 @@ from api.models.base import Base
 
 
 class Source(Base):
+    """kind: 'product_document' | 'service_centre_list'."""
+
     __tablename__ = "sources"
 
     id: Mapped[int] = mapped_column(primary_key=True)

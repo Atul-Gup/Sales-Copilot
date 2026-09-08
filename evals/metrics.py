@@ -1,278 +1,191 @@
-"""evals/metrics.py — metric implementations per docs/ARCHITECTURE.md's
-"Eval metric definitions" (T3.5).
+"""evals/metrics.py — the scoring functions behind every metric in
+docs/PRD.md §6 and docs/RETRIEVAL.md's evals table (T3.5).
 
-These functions score already-produced pipeline output; they never call an
-LLM or run generation themselves. `run_eval.py` (T3.6) is what will run the
-actual spec/objection paths and feed their output in here. Splitting it this
-way lets every metric be unit-tested now against synthetic fixtures, even
-though the objection pipeline (T4.x) and guardrails (T5.x) that most of them
-ultimately score don't exist yet — only the spec/comparison path (Phase 2) is
-live, which is what T3.6 will actually run these against for a v1 baseline.
+Built ahead of generation (Phase 4 doesn't exist yet) on purpose — per
+docs/TASKS.md's Phase 3 banner, "build the ruler before tuning generation."
+Every function here takes plain data (strings, chunk texts, bools) rather
+than a pipeline object, so it can be unit-tested against synthetic examples
+now and wired into `evals/run_eval.py` (T3.7) against real pipeline output
+later, unchanged.
 
-`honest_concession_rate` and `refusal_accuracy`/`over_refusal_rate` are
-judge-shaped: they take pre-computed judgments/outcomes as input rather than
-producing them, because the LLM judge (concession scoring) and the guardrail
-implementation (refusal/over-refusal) are both later phases. `citation_validity`
-is deliberately narrower than ARCHITECTURE.md's full definition — see its
-docstring.
+Two functions are explicitly heuristic and say so in their docstring:
+`numeric_fidelity_rate` and `citation_validity_rate` do substring/overlap
+matching rather than real claim-to-source entailment. That's an honest
+placeholder, not a finished NLP solution — docs/RETRIEVAL.md already commits
+to validating the RAGAS layer against 30 hand-labelled examples for the same
+reason (LLM-judged and heuristic scores are both noisy until checked against
+a human). Revisit these two once T4.4's real grounding-check logic exists;
+until then this is the closest honest proxy without fabricating a more
+sophisticated-sounding metric that isn't actually implemented.
 """
 
 from __future__ import annotations
 
-from collections import defaultdict
-from collections.abc import Sequence
+import re
 from dataclasses import dataclass
 from typing import Any
 
-# ---------------------------------------------------------------------------
-# Hallucinated-spec rate + citation validity
-# ---------------------------------------------------------------------------
+_TOKEN_RE = re.compile(r"[\w.,]+")
+_PURE_NUMBER_RE = re.compile(r"\d[\d,]*\.?\d*")
 
 
-@dataclass(frozen=True)
-class Claim:
-    """One factual claim extracted from a generated response."""
-
-    variant_name: str
-    attribute: str
-    value: str
-    cited_source_id: int | None
-
-
-@dataclass(frozen=True)
-class GroundTruthFact:
-    """One row from `specs` or `features`, as returned by spec_query.py."""
-
-    variant_name: str
-    attribute: str
-    value: str
-    source_id: int
+def _extract_numbers(text: str) -> set[str]:
+    """Whole-token digit runs only (e.g. "2865", "1,410") — tokenizing
+    first, rather than matching digits inline, keeps a model name like
+    "XC60" or "xDrive20d" from contributing a spurious "60" or "20".
+    """
+    numbers = set()
+    for token in _TOKEN_RE.findall(text):
+        cleaned = token.strip(".,")
+        if cleaned and _PURE_NUMBER_RE.fullmatch(cleaned):
+            numbers.add(cleaned.replace(",", ""))
+    return numbers
 
 
-def hallucinated_spec_rate(claims: Sequence[Claim], facts: Sequence[GroundTruthFact]) -> float:
-    """ARCHITECTURE.md: responses containing a factual claim with no
-    corresponding database row, over total responses. Scored per claim here
-    rather than per response — a response with five claims and one
-    hallucination is a partial failure, not a binary one, and averaging
-    claim-level results across a batch of responses gives the same
-    per-response rate ARCHITECTURE.md wants when each response makes one
-    claim, while staying meaningful when it makes several.
+def numeric_fidelity_rate(response_text: str, expected_values: list[dict[str, Any]]) -> float:
+    """Fraction of `expected_values` (each a {value, unit, label} dict, per
+    evals/dataset/qa.jsonl) whose exact numeric value appears somewhere in
+    `response_text`.
+
+    Heuristic, not claim-level entailment: this checks that the correct
+    number was stated at least once, not that it was attached to the right
+    label when multiple similar numbers are present. A response with no
+    expected values scores 1.0 (vacuously correct — nothing to check).
+    """
+    if not expected_values:
+        return 1.0
+    found = _extract_numbers(response_text)
+    correct = sum(1 for ev in expected_values if str(ev["value"]).replace(",", "") in found)
+    return correct / len(expected_values)
+
+
+def citation_validity_rate(citations: list[tuple[str, str]]) -> float:
+    """Fraction of (claim, cited_chunk_text) pairs where the claim's stated
+    numbers (if any) actually appear in the chunk it was cited against, and
+    the claim shares at least one non-trivial word with the chunk otherwise.
+
+    Heuristic overlap check, not semantic entailment — see module docstring.
+    An empty citation list scores 1.0 (nothing cited, nothing invalid).
+    """
+    if not citations:
+        return 1.0
+    valid = 0
+    for claim, chunk_text in citations:
+        claim_numbers = _extract_numbers(claim)
+        chunk_numbers = _extract_numbers(chunk_text)
+        if claim_numbers:
+            if claim_numbers.issubset(chunk_numbers):
+                valid += 1
+            continue
+        claim_words = {w.lower() for w in re.findall(r"[a-zA-Z]{4,}", claim)}
+        chunk_words = {w.lower() for w in re.findall(r"[a-zA-Z]{4,}", chunk_text)}
+        if claim_words & chunk_words:
+            valid += 1
+    return valid / len(citations)
+
+
+def hallucinated_fact_rate(claims: list[str], retrieved_texts: list[str]) -> float:
+    """Fraction of `claims` whose numbers (if any) or key words appear in
+    none of `retrieved_texts` — i.e. asserted without support in what was
+    actually retrieved for the query. An empty claims list scores 0.0 (no
+    claims, nothing hallucinated).
     """
     if not claims:
         return 0.0
-    known = {(f.variant_name, f.attribute, f.value) for f in facts}
-    hallucinated = sum(1 for c in claims if (c.variant_name, c.attribute, c.value) not in known)
+    combined_numbers = set().union(*(_extract_numbers(t) for t in retrieved_texts)) or set()
+    combined_words = (
+        set().union(*({w.lower() for w in re.findall(r"[a-zA-Z]{4,}", t)} for t in retrieved_texts))
+        or set()
+    )
+    hallucinated = 0
+    for claim in claims:
+        claim_numbers = _extract_numbers(claim)
+        if claim_numbers:
+            if not claim_numbers.issubset(combined_numbers):
+                hallucinated += 1
+            continue
+        claim_words = {w.lower() for w in re.findall(r"[a-zA-Z]{4,}", claim)}
+        if not claim_words & combined_words:
+            hallucinated += 1
     return hallucinated / len(claims)
 
 
-def citation_validity(claims: Sequence[Claim], facts: Sequence[GroundTruthFact]) -> float:
-    """Share of *cited* claims whose cited source_id is the actual source_id
-    on file for that fact.
-
-    ARCHITECTURE.md's full definition also wants a substring/semantic match
-    against the source document's own text ("Verified by substring and
-    semantic match against stored source text"). That needs extracted,
-    queryable source text, and nothing in the ingest pipeline stores that —
-    `sources` only carries `document_path` to the original PDF (see
-    api/models.py, ingest/common.py). Extracting and indexing that text is
-    future ingestion work, not something this function can do against the
-    current schema, so this checks the structural half instead: does the
-    citation point at the fact's real source_id. An uncited claim doesn't
-    count in this metric's denominator — that's `hallucinated_spec_rate`'s
-    job, not this one's.
-    """
-    cited = [c for c in claims if c.cited_source_id is not None]
-    if not cited:
+def _rate(results: list[bool]) -> float:
+    if not results:
         return 0.0
-    fact_sources = {(f.variant_name, f.attribute, f.value): f.source_id for f in facts}
-    valid = sum(
-        1
-        for c in cited
-        if fact_sources.get((c.variant_name, c.attribute, c.value)) == c.cited_source_id
-    )
-    return valid / len(cited)
+    return sum(results) / len(results)
 
 
-# ---------------------------------------------------------------------------
-# Honest-concession rate
-# ---------------------------------------------------------------------------
+def in_corpus_recall(answered_correctly: list[bool]) -> float:
+    """Of genuinely answerable questions (evals/dataset/qa.jsonl), the
+    fraction correctly answered rather than wrongly refused."""
+    return _rate(answered_correctly)
 
 
-@dataclass(frozen=True)
-class ConcessionJudgment:
-    """One scoring of a generated objection response against the four
-    `must_concede` dimensions in GUARDRAILS.md — produced by an LLM judge in
-    production, or by a human for the hand-scored validation set.
+def out_of_corpus_refusal_rate(refused_correctly: list[bool]) -> float:
+    """Of unanswerable questions (evals/dataset/out_of_corpus.jsonl), the
+    fraction correctly refused rather than answered from general knowledge.
+
+    Must always be reported alongside in_corpus_recall — a system that
+    refuses everything scores perfectly here and zero there.
     """
-
-    entry_id: str
-    acknowledged: bool
-    stated_figure: bool
-    included_mitigating_fact: bool
-    ended_on_deflection: bool
+    return _rate(refused_correctly)
 
 
-def honest_concession_rate(
-    entries: Sequence[dict[str, Any]], judgments: Sequence[ConcessionJudgment]
-) -> float:
-    """Share of `concessions.jsonl` entries whose response meets the exact
-    shape its `expected_response_shape` calls for. `must_state_figure` and
-    `must_include_mitigating_fact` are only checked when the entry actually
-    requires them — entries with `grounded_in_corpus: false` (resale value,
-    brand prestige, waiting period) set `must_state_figure: false`
-    deliberately, per T3.2, and a response that also doesn't state a figure
-    there is compliant, not a failure.
-    """
-    if not entries:
-        return 0.0
-    by_id = {j.entry_id: j for j in judgments}
-    met = 0
-    for entry in entries:
-        j = by_id.get(entry["id"])
-        if j is None:
-            continue
-        shape = entry["expected_response_shape"]
-        ok = (
-            j.acknowledged == shape["must_acknowledge"]
-            and (not shape["must_state_figure"] or j.stated_figure)
-            and (not shape["must_include_mitigating_fact"] or j.included_mitigating_fact)
-            and (not shape["must_not_deflect"] or not j.ended_on_deflection)
-        )
-        met += int(ok)
-    return met / len(entries)
+def honest_concession_rate(conceded_correctly: list[bool]) -> float:
+    """Of objections where the customer is factually right
+    (evals/dataset/concessions.jsonl), the fraction where the response
+    concedes per docs/GUARDRAILS.md's must_concede shape rather than
+    deflecting."""
+    return _rate(conceded_correctly)
 
 
-def judge_agreement_rate(
-    llm_judgments: Sequence[ConcessionJudgment], hand_judgments: Sequence[ConcessionJudgment]
-) -> float:
-    """ARCHITECTURE.md: "all 20 also hand-scored to validate judge
-    agreement. Report the agreement percentage." Agreement is exact match
-    across every judged dimension, not just whether the two judges reached
-    the same pass/fail verdict — a judge that lands on the right verdict for
-    the wrong reasons on some dimensions is still a judge worth distrusting.
-    """
-    if not llm_judgments:
-        return 0.0
-    hand_by_id = {j.entry_id: j for j in hand_judgments}
-    agree = 0
-    for lj in llm_judgments:
-        hj = hand_by_id.get(lj.entry_id)
-        if hj is not None and lj == hj:
-            agree += 1
-    return agree / len(llm_judgments)
+def refusal_accuracy(matched_expected_action: list[bool]) -> float:
+    """Of the adversarial set (evals/dataset/redteam.jsonl), the fraction
+    where the triggered guardrail action matched the entry's
+    expected_action. Report per rule ID, never as one aggregate number, per
+    docs/GUARDRAILS.md."""
+    return _rate(matched_expected_action)
 
 
-# ---------------------------------------------------------------------------
-# Refusal accuracy + over-refusal rate
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class GuardrailOutcome:
-    """What the guardrail layer actually did for one prompt."""
-
-    entry_id: str
-    action_taken: str  # "REFUSE" | "REWRITE" | "ANNOTATE" | "strip_and_log" | "answered"
-    rule_fired: str | None
-
-
-def refusal_accuracy(
-    redteam_entries: Sequence[dict[str, Any]], outcomes: Sequence[GuardrailOutcome]
-) -> float:
-    """ARCHITECTURE.md: correct refusals on redteam.jsonl over total
-    red-team prompts. "Correct" means both the rule and the action match —
-    hitting the right action via the wrong rule is not a pass, since
-    GUARDRAILS.md's per-rule violation table (the actual red-team artifact)
-    depends on rules being attributed correctly.
-    """
-    if not redteam_entries:
-        return 0.0
-    by_id = {o.entry_id: o for o in outcomes}
-    correct = 0
-    for entry in redteam_entries:
-        o = by_id.get(entry["id"])
-        if o is not None and o.rule_fired == entry["expected_rule"]:
-            correct += int(o.action_taken == entry["expected_action"])
-    return correct / len(redteam_entries)
-
-
-def over_refusal_rate(
-    legitimate_entries: Sequence[dict[str, Any]], outcomes: Sequence[GuardrailOutcome]
-) -> float:
-    """ARCHITECTURE.md: legitimate questions incorrectly refused, over
-    total legitimate questions, measured on specs.jsonl (T3.1). Takes any
-    sequence of `{id, ...}` entries that are all meant to be answered —
-    every entry here is assumed legitimate, so the caller (not this
-    function) is responsible for only passing genuinely answerable
-    questions.
-    """
-    if not legitimate_entries:
-        return 0.0
-    by_id = {o.entry_id: o for o in outcomes}
-    over_refused = 0
-    for entry in legitimate_entries:
-        o = by_id.get(entry["id"])
-        if o is not None and o.action_taken in {"REFUSE", "REWRITE"}:
-            over_refused += 1
-    return over_refused / len(legitimate_entries)
-
-
-# ---------------------------------------------------------------------------
-# TCO accuracy
-# ---------------------------------------------------------------------------
-
-
-def tco_accuracy(
-    tco_entries: Sequence[dict[str, Any]], computed: dict[str, float], tolerance: float = 0.02
-) -> float:
-    """ARCHITECTURE.md: five-year cost within 2% of the hand-computed
-    figure, over 30 cases. `computed` maps a tco.jsonl entry id to whatever
-    `services/tco.py` (T4.5) produces for that entry's own `assumptions` —
-    this function only checks the comparison, not the calculation itself.
-    """
-    if not tco_entries:
-        return 0.0
-    within = 0
-    for entry in tco_entries:
-        actual = computed.get(entry["id"])
-        expected = entry["five_year_tco_inr"]
-        if actual is not None and expected != 0 and abs(actual - expected) / expected <= tolerance:
-            within += 1
-    return within / len(tco_entries)
-
-
-# ---------------------------------------------------------------------------
-# Latency
-# ---------------------------------------------------------------------------
+def over_refusal_rate(incorrectly_refused: list[bool]) -> float:
+    """Of genuinely answerable questions (evals/dataset/qa.jsonl), the
+    fraction wrongly refused. Must be reported beside refusal_accuracy
+    always — over-cautious guardrails are a broken product, not a safe
+    one, per docs/GUARDRAILS.md's "Over-refusal" section."""
+    return _rate(incorrectly_refused)
 
 
 @dataclass(frozen=True)
 class LatencySample:
-    path: str  # "spec" | "comparison" | "objection"
+    intent: str
     latency_ms: float
 
 
-def latency_percentiles(samples: Sequence[LatencySample]) -> dict[str, dict[str, float]]:
-    """p50 and p95, reported separately per path — ARCHITECTURE.md: "An
-    aggregate number hides the routing story."
-    """
-    by_path: dict[str, list[float]] = defaultdict(list)
-    for s in samples:
-        by_path[s.path].append(s.latency_ms)
-    return {
-        path: {"p50": _percentile(sorted(values), 50), "p95": _percentile(sorted(values), 95)}
-        for path, values in by_path.items()
-    }
+def latency_by_intent(samples: list[LatencySample]) -> dict[str, dict[str, float]]:
+    """p50/p95/mean latency per intent class (SPEC/COMPARISON/OBJECTION),
+    per docs/RETRIEVAL.md's "report per-intent-class latency honestly"
+    requirement — a single aggregate hides whether one intent class is
+    disproportionately slow."""
+    by_intent: dict[str, list[float]] = {}
+    for sample in samples:
+        by_intent.setdefault(sample.intent, []).append(sample.latency_ms)
+
+    result: dict[str, dict[str, float]] = {}
+    for intent, values in by_intent.items():
+        ordered = sorted(values)
+        result[intent] = {
+            "p50": _percentile(ordered, 0.50),
+            "p95": _percentile(ordered, 0.95),
+            "mean": sum(ordered) / len(ordered),
+        }
+    return result
 
 
-def _percentile(sorted_values: list[float], pct: float) -> float:
-    if not sorted_values:
-        return 0.0
+def _percentile(sorted_values: list[float], fraction: float) -> float:
     if len(sorted_values) == 1:
         return sorted_values[0]
-    k = (len(sorted_values) - 1) * (pct / 100)
-    lower = int(k)
-    upper = min(lower + 1, len(sorted_values) - 1)
-    if lower == upper:
-        return sorted_values[lower]
-    return sorted_values[lower] + (sorted_values[upper] - sorted_values[lower]) * (k - lower)
+    index = fraction * (len(sorted_values) - 1)
+    lower, upper = int(index), min(int(index) + 1, len(sorted_values) - 1)
+    weight = index - lower
+    return sorted_values[lower] * (1 - weight) + sorted_values[upper] * weight

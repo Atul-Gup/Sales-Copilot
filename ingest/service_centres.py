@@ -28,16 +28,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import openpyxl
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.db import SessionLocal
-from api.models import Brand, CityAlias, ServiceCentre, Source
+from api.models import CityAlias, ServiceCentre, Source
 from ingest.common import insert_source
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "sources" / "service centres"
 SHEET_PATH = DATA_DIR / "Volvo and its competitors service centre.xlsx"
-INGESTED_AT = datetime(2026, 9, 4, tzinfo=UTC)
 
 # Rows excluded by (brand, centre_name) — see module docstring for why.
 EXCLUDED_ROWS = {
@@ -71,18 +69,13 @@ BRAND_SOURCES = {
 }
 
 
-def _get_brand(session: Session, name: str) -> Brand:
-    brand = session.scalar(select(Brand).where(Brand.name == name))
-    if brand is None:
-        raise RuntimeError(f"Brand {name!r} not found — run its T1.4/T1.5 ingest script first")
-    return brand
-
-
 def _canonical_city(raw_city: str) -> str:
     return CITY_ALIASES.get(raw_city, raw_city)
 
 
 def run(session: Session) -> None:
+    now = datetime.now(UTC)
+
     for alias, canonical in CITY_ALIASES.items():
         session.add(CityAlias(alias=alias, canonical_city=canonical))
 
@@ -95,8 +88,8 @@ def run(session: Session) -> None:
             url=url,
             document_title=f"{brand_name} India Service Centre Locations",
             document_path=SHEET_PATH,
-            retrieved_at=INGESTED_AT,
-            verified_at=INGESTED_AT,
+            retrieved_at=now,
+            verified_at=now,
         )
 
     wb = openpyxl.load_workbook(SHEET_PATH, data_only=True)
@@ -129,10 +122,9 @@ def run(session: Session) -> None:
         if (brand_name, centre_name) in EXCLUDED_ROWS:
             continue
 
-        brand = _get_brand(session, brand_name)
         session.add(
             ServiceCentre(
-                brand_id=brand.id,
+                brand=brand_name,
                 city=_canonical_city(city),
                 state=state,
                 address=f"{centre_name}, {address}",

@@ -2,10 +2,11 @@
 
 Rule-based, not a model — there is no `llm/client.py` yet (see T4.1), and a
 regex pass over the query text comfortably clears the <100ms budget from
-docs/ARCHITECTURE.md without adding an LLM call to a path that doesn't need
-one. Rule 2 in AGENTS.md forbids the SPEC path from touching an LLM anyway;
-keeping the classifier itself LLM-free means the router never becomes the
-thing that violates that rule.
+docs/ARCHITECTURE.md without adding an LLM call just to decide which prompt
+to use. Per docs/RETRIEVAL.md's "single generation path" decision, every
+intent class now goes through full LLM narration over the retrieved chunks —
+this classifier only selects which prompt style generation uses downstream.
+It never skips retrieval and never decides whether generation happens.
 
 Precedence matters: OBJECTION markers are checked first because an objection
 often *contains* a comparison ("BMW gives free service, why doesn't Volvo")

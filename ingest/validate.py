@@ -1,8 +1,9 @@
 """Gate between scraped/entered data and the database.
 
-Every ingest script (volvo.py, bmw.py, euroncap.py, ...) must run each fact
-through validate_fact_record before it reaches a session.add(). Nothing here
-inserts anything — it only decides whether a record is allowed to.
+Every ingest script (ingest/product_docs.py, ingest/service_centres.py, ...)
+must run each fact through validate_fact_record before it reaches a
+session.add(). Nothing here inserts anything — it only decides whether a
+record is allowed to.
 """
 
 from datetime import UTC, datetime, timedelta
@@ -13,9 +14,23 @@ from pydantic import BaseModel, Field, field_validator
 ALLOWED_SOURCE_KINDS = frozenset(
     {
         "oem_site",  # Volvo/BMW/Mercedes-Benz/Audi India official sites
+        "product_document",  # the five reformatted product documents, docs/CORPUS.md
         "euro_ncap_report",
         "homologation_data",  # official homologated range/efficiency figures
         "service_locator",  # Volvo's own dealer and service locator
+    }
+)
+
+# The entire corpus, per docs/CORPUS.md — "if a document isn't listed here,
+# it isn't in scope — do not go hunting for it, and do not ingest anything
+# not named below." Titles match docs/CORPUS.md's "Document" column exactly.
+ALLOWED_PRODUCT_DOCUMENT_TITLES = frozenset(
+    {
+        "Volvo XC60 product document",
+        "Volvo EX30 product document",
+        "BMW X3 product document",
+        "Mercedes GLC product document",
+        "Audi Q5 product document",
     }
 )
 
@@ -69,6 +84,14 @@ def validate_fact_record(record: FactRecord, *, now: datetime | None = None) -> 
     source = record.source
     if source.kind not in ALLOWED_SOURCE_KINDS:
         raise IngestValidationError(f"unknown source kind: {source.kind!r}")
+
+    if source.kind == "product_document" and source.document_title not in (
+        ALLOWED_PRODUCT_DOCUMENT_TITLES
+    ):
+        raise IngestValidationError(
+            f"document {source.document_title!r} is not in docs/CORPUS.md's corpus — "
+            "do not ingest anything not named there"
+        )
 
     if source.verified_at is None:
         raise IngestValidationError("source has never been verified")

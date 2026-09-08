@@ -1,236 +1,159 @@
 # RETRIEVAL — Showroom Copilot
 
-How retrieval and generation work. Supersedes the retrieval sketch in `ARCHITECTURE.md`.
+How retrieval and generation work.
 
-The one-line summary for an interview: **two retrieval tracks, routed by query type, with the objection track built as a LangGraph cycle because it genuinely has one.** Plain SQL where control flow is a straight line; a framework only where it earns its place.
-
----
-
-## The three tracks (Adaptive RAG)
-
-A classifier routes each query to the cheapest path that can answer it correctly. This pattern has a name now — adaptive RAG — but it's just: don't run a language model when a database query will do.
-
-```
-query → router ─┬─ SPEC       → SQL over fact rows          (no LLM, no retrieval)
-                ├─ COMPARISON → precomputed battle card     (no LLM at serve time)
-                └─ OBJECTION / → LangGraph RAG cycle         (hybrid retrieval + generate + verify)
-                   DOCUMENT
-```
-
-The interview point is the routing decision itself: most "RAG systems" force every query through one pipeline. Yours routes by what the query needs. That's the judgment worth demonstrating.
+The one-line summary for an interview: **closed-book RAG over a curated document set, with a measured refusal behaviour when the answer isn't in the documents — one retrieval path, rendered as natural chat language, with guardrail content kept visible inside the prose.**
 
 ---
 
-## Two corpora, two retrieval mechanics
+## Why closed-book is the harder, more interesting claim
 
-The mistake in the earlier design was treating fact rows as the only retrieval target. There are actually two very different bodies of knowledge here, and they need different retrieval:
-
-### Corpus A — structured facts (rows)
-Specs, features, prices, safety scores, service centres. Retrieval unit is a **typed row with a `source_id`**. Selection is a SQL join off the matched objection category. Exact, verifiable, no similarity threshold.
-
-### Corpus B — narrative documents (chunks)
-Warranty terms, service-plan documents, Euro NCAP full reports, owner's manuals, official brochures. Long prose where the answer is a passage, not a field. This is where classic document RAG earns its place.
-
-Example queries that need Corpus B:
-- "What's covered under the extended warranty for the battery pack?"
-- "Does the service plan include brake pads?"
-- "What did the Euro NCAP report actually say about the child occupant test?"
-
-These are real questions consultants get, and none of them is a field lookup.
-
-**Why this split matters:** it lets you honestly say you built both structured retrieval and document RAG, and — more importantly — that you knew which to use where. Chunking the spec sheet would have destroyed verifiability; not chunking the warranty PDF would have made it unanswerable.
+An open system that cites sources when it has them is good practice. A **closed-book** system additionally has to recognise the boundary of its own knowledge and refuse past it — distinguishing "I found this in a document" from "I know this generally" and acting only on the former. That distinction, not the retrieval mechanics, is the core engineering problem in this version of the product.
 
 ---
 
-## Corpus B ingestion
+## The corpus
+
+Five documents — see `docs/CORPUS.md` for the authoritative list. One folder per brand:
 
 ```
-PDF → layout-aware parse → semantic chunking → dense + sparse index → pgvector + BM25
+data/sources/products/
+├── volvo/{xc60, ex30}
+├── bmw/x3
+├── mercedes/glc
+└── audi/q5
 ```
 
-- **Parsing:** layout-aware, because warranty and NCAP docs have tables and multi-column layouts that naive text extraction scrambles. Note in the README if a particular doc type defeated the parser — that's an honest limitation, not a failure.
-- **Chunking:** semantic, not fixed-size. Split on section boundaries so a warranty clause stays intact. Record `document_title`, `section`, `page` on every chunk so citations point somewhere a consultant can verify.
-- **Every chunk carries a `source_id`**, same rule as the fact rows. A chunk with no traceable source does not get indexed.
+Every chunk carries `source_id NOT NULL`. No NCAP, no warranty, no service-plan documents — those questions are refused, not answered from the model's general knowledge. Service centre data is a separate structured source, checked by lookup, not part of this chunked corpus.
 
 ---
 
-## Hybrid retrieval (Corpus B)
-
-Dense embeddings alone fail on this corpus because it's full of exact-match tokens: variant names ("XC60 B5 Plus Dark"), engine codes ("xDrive20i"), protocol years ("Euro NCAP 2022"). Semantic similarity blurs those; keyword search matches them exactly.
+## Single retrieval path
 
 ```
 query
-  ├─ dense retrieval (pgvector, cosine)     → top 25
-  ├─ sparse retrieval (BM25)                → top 25
-  └─ reciprocal rank fusion                 → merged top 50
+  │
+  ├─ classify_intent   → SPEC | COMPARISON | OBJECTION
+  │                       (selects prompt style — does NOT skip retrieval,
+  │                        and does not change WHETHER generation happens)
+  │
+  ├─ retrieve           hybrid: dense (pgvector) + BM25 + reciprocal rank fusion
+  │                       → top 50 → cross-encoder rerank → top 5
+  │
+  ├─ in_corpus?         is the top reranked result above a calibrated
+  │                     relevance threshold?
+  │     │no                    │yes
+  │     ▼                       ▼
+  │  refuse_gracefully     generate
+  │  (name what's           generate — LLM narration for all intent
+  │   missing)               classes, over the retrieved chunks
+  │                               │
+  │                         verify_grounding
+  │                         (checks every claim AND every number/
+  │                          unit against the retrieved chunks —
+  │                          numeric mismatch is a violation too)
+  │                               │
+  │                    violation? loop once (regen) → refuse
+  │                               │no
+  │                               ▼
+  │                       render — citations and "don't claim"/
+  │                       concession content stay visually distinct
+  │                       inside the natural-language response
 ```
 
-Reciprocal rank fusion because it needs no score normalisation between the two retrievers — it fuses on rank position. Published comparisons on this kind of mixed corpus put hybrid recall near 0.91 against ~0.72 for sparse alone. You have a concrete reason to use it, which is the answer you want when asked "why hybrid?"
-
-**Report the ablation.** Dense-only vs sparse-only vs hybrid on your labelled retrieval set. That table is worth more than the feature itself, and it proves you measured rather than cargo-culted.
+This whole path is built as a **LangGraph cycle**: `verify_grounding → generate → verify_grounding` is a genuine loop with a counter, which is the actual justification for using a graph framework here rather than plain function calls. State (retrieved context, attempt count, violations) is passed explicitly between nodes, and checkpointing gives replayable execution traces for free — feeding observability later.
 
 ---
 
-## Reranking (Corpus B) — a measured trade-off
+## Hybrid retrieval and reranking
 
-```
-fused top 50 → cross-encoder reranker → top 5 → into generation context
-```
+Dense embeddings alone under-perform on this corpus because it's full of exact-match tokens — trim names, engine codes, model years. BM25 catches those; dense catches paraphrase and synonymy. Fused with reciprocal rank fusion (no score normalisation needed, fuses on rank position). `api/services/retrieve.py::hybrid_search` implements this; see below for why a cross-encoder reranking pass on top of it was evaluated and dropped, at least for now.
 
-Reranking scores each candidate against the query with a heavier cross-encoder. Reported gains of 15–30% on context precision, at a latency cost of a few hundred milliseconds.
+**Embeddings:** OpenAI `text-embedding-3-small`, cached — compute once per chunk, don't re-embed unchanged content on every eval run. The `chunks.embedding` column is `vector(1536)` to match. Chosen because the corpus is small enough that embedding quality differences are unlikely to matter, and because it's already in the stack (no new vendor). Report a local-vs-hosted ablation once, to make the choice measured rather than assumed.
 
-**This is a real decision, not a default.** You have a 2-second p95 budget. So:
+**Report the ablation** (dense-only vs sparse-only vs hybrid, with vs without reranking) on a labelled retrieval set. The table is worth more than the feature — it's evidence the choices were measured, not assumed. *(Blocked on `evals/dataset/qa.jsonl` existing — Phase 3, not built yet.)*
 
-1. Measure context precision with and without reranking
-2. Measure the added latency
-3. Decide per track, and write down the decision
+### Reranking decision (T2.2): dropped, not just deferred
 
-The honest interview answer — "reranking added 18% context precision for 240ms; I kept it on the objection path because it had headroom and dropped it on the document path because that one was already at budget" — demonstrates exactly the cost-awareness that separates production engineers from tutorial-followers. Whatever you actually measure, report it.
+A cross-encoder rerank over the fused top-50 was attempted with `sentence-transformers` (a local CPU model, e.g. `cross-encoder/ms-marco-MiniLM-L-6-v2`) and abandoned after two real install attempts — the default `torch` wheel and the dedicated CPU-only wheel from `download.pytorch.org/whl/cpu` both fail to load on this machine with `WinError 1114` (a DLL initialization failure in `c10.dll`), an environment-level issue, not a version mismatch. This is a real, measured piece of friction, not a hypothetical one.
 
----
+Combined with the corpus's actual size — **49 chunks ingested from the 4 documents currently present, and not much more once the fifth (Mercedes GLC) lands** — a reranking pass over the fused top-50 is close to reranking the entire corpus for most queries. The precision gain a cross-encoder buys over BM25+dense fusion is a much harder case to make at this scale than at, say, thousands of chunks.
 
-## The objection path as a LangGraph cycle
-
-This path is a graph with a loop, which is the reason to use LangGraph here and nowhere else. A chain can't express "verify, and if it fails, go back and regenerate."
-
-```
-                    ┌───────────────┐
-                    │  classify_    │
-                    │  objection    │  → category + confidence
-                    └──────┬────────┘
-                           │
-                  confidence < threshold?
-                     │yes         │no
-                     ▼            ▼
-              ┌──────────┐   ┌─────────────┐
-              │ abstain  │   │  retrieve   │  hybrid + rerank
-              │ (generic │   │  facts +    │  (Corpus A join +
-              │ guidance)│   │  documents  │   Corpus B chunks)
-              └──────────┘   └──────┬──────┘
-                                    ▼
-                            ┌──────────────┐
-                            │  generate    │  3 blocks:
-                            │  response    │  true / framing / don't-claim
-                            └──────┬───────┘
-                                   ▼
-                            ┌──────────────┐
-                            │  verify_     │  every claim ↔ retrieved context
-                            │  grounding   │  + guardrail rules
-                            └──────┬───────┘
-                                   │
-                          violation found?
-                         │yes            │no
-                    (attempts<1)          ▼
-                         │            ┌────────┐
-                         ▼            │ return │
-                  back to generate    └────────┘
-                         │
-                    (attempts==1)
-                         ▼
-                    ┌────────┐
-                    │ refuse │
-                    └────────┘
-```
-
-### Nodes
-
-| Node | Does | Notes |
-|---|---|---|
-| `classify_objection` | Free-text → category + confidence | Small model. This is the Corpus A retrieval trigger |
-| `abstain` | Low-confidence fallback | Forcing a category produces confidently wrong framing. Abstaining is correct behaviour |
-| `retrieve` | Hybrid retrieval, both corpora | SQL join for facts, hybrid+rerank for documents |
-| `generate` | Three-block response | The prompt is yours; version it |
-| `verify_grounding` | Claim-by-claim check + guardrails | The loop's condition. This is the whole point |
-| `refuse` | Decline with reason | Reached only after one failed regeneration |
-
-### Why this specifically justifies LangGraph
-
-- **It's a cycle**, not a chain. `verify_grounding → generate → verify_grounding` is a loop with a counter.
-- **State is explicit** — attempts, retrieved context, violations — and passed between nodes.
-- **Checkpointing gives you traces for free**, which feeds Phase 8 observability. Every run is a replayable graph execution.
-
-Keep spec and comparison paths as plain functions. If asked why they're not in LangGraph: because they have no branches or loops, and wrapping a straight line in a graph framework is complexity for its own sake. That contrast is the answer that lands.
+**Decision: skip the reranking stage.** `hybrid_search`'s fused ranking is passed directly to generation. Revisit if any of these changes materially:
+- the corpus grows enough that top-50 stops being close to "everything" (many more documents/models added to `docs/CORPUS.md`), or
+- a lighter-weight reranking option becomes available that doesn't require `torch` on this deployment target (a hosted rerank API, an ONNX-only cross-encoder runtime, or simply a different host where the DLL issue doesn't reproduce), or
+- **(measured, not anticipated) the `in_corpus?` calibration below.** T3.6's actual calibration run found the fused RRF score cannot support a well-calibrated gate — see that section for the finding. This is the strongest of the three reasons to revisit, since it's evidence rather than a prediction.
 
 ---
 
-## Grounding verification — the part that matters most
+## `in_corpus?` — the node that matters most
 
-`verify_grounding` is where hallucination actually gets stopped, and it's the differentiated engineering:
+Retrieval returning *something* is not the same as returning something relevant. Vector and BM25 search will always return their nearest results, even when nothing in the corpus actually answers the question.
 
-1. Extract atomic claims from the generated response (structured LLM call)
-2. For each claim:
-   - Numeric/spec claim → match against the retrieved **fact rows** (Corpus A), with tolerance
-   - Narrative claim → match against the retrieved **chunks** (Corpus B), semantic + span check
-3. Any unmatched claim → violation → loop back to `generate` once → `refuse`
+**Calibrate the threshold, don't default it:**
+1. Build `qa.jsonl` — 30+ questions genuinely answerable from the five documents. *(Done, T3.1 — 32 questions across the 4 currently-sourced documents.)*
+2. Build `out_of_corpus.jsonl` — 30 questions with no supporting document: safety ratings, warranty terms, on-road pricing, anything deliberately not ingested. *(Done, T3.2 — 30 questions across 7 categories.)*
+3. Sweep the threshold across both sets; pick the point that best trades off the two error types; report the curve, not just the chosen point. *(Done, T3.6 — `evals/calibrate_threshold.py`, results in `evals/results/threshold_calibration.md`. Since T2.2 dropped the reranker, there is no reranker score to sweep; this sweeps `hybrid_search_scored`'s fused RRF score instead — see the finding below.)*
 
-Anyone can retrieve and generate. Verifying every claim against the retrieval set *after* generation, then refusing rather than shipping an unsupported claim, is what makes the hallucination number real. Lead with this.
+### T3.6 finding: the RRF score is a poor `in_corpus?` signal without reranking
 
----
+The calibration run against the real corpus (49 chunks) surfaced a real, measured consequence of T2.2's "drop the reranker" decision, not just the anticipated latency/install-friction tradeoff: **the fused RRF score does not separate in-corpus from out-of-corpus questions smoothly.** The curve has a cliff, not a slope — between two adjacent observed scores, `out_of_corpus_refusal_rate` jumps from 10% to 100% while `in_corpus_recall` collapses from 100% to 0%. There is no threshold in between to land on. The best available point (0.031778) gets in_corpus_recall to 100% but out_of_corpus_refusal_rate only to 10.34% — far short of `docs/PRD.md` §6's 95% target, and no other point on the curve does better on both simultaneously.
 
-## Evaluation
+**Why this happens:** RRF fuses on rank *position*, not relevance magnitude — by construction, the top few positions across a fused list of ~50 candidates score similarly regardless of whether the top result is a strong or a barely-there match. A cross-encoder reranker exists specifically to restore a real relevance magnitude on top of that; without one, the `in_corpus?` gate has no graded signal to threshold against, only a near-binary one.
 
-Two layers: standard metrics to prove fluency, custom metrics to prove judgment.
+**This is now a second, independent trigger to revisit T2.2 alongside the two already listed** (corpus growth, a non-torch reranking option) — and it's a stronger one, because it's measured against the real corpus rather than anticipated. The honest characterization of where this leaves the product: retrieval currently cannot support a well-calibrated `in_corpus?` gate at production quality without either (a) a working reranker, (b) a larger corpus that gives RRF more positions to spread scores across, or (c) a different confidence signal entirely (e.g. the raw dense cosine similarity of the top result, evaluated independently of BM25 fusion — not yet tried). T4.5 should not wire the gate to 0.031778 and call it calibrated; that number is documented as the best of a bad set, not a good threshold.
 
-### Layer 1 — RAGAS (standard, proves fluency)
+**Report the resulting pair, always together:**
+- **In-corpus recall** — of genuinely answerable questions, how many are correctly answered rather than wrongly refused.
+- **Out-of-corpus refusal rate** — of unanswerable questions, how many are correctly refused rather than answered from the model's general knowledge.
 
-Run on the objection and document tracks:
-
-| Metric | Measures | Target |
-|---|---|---|
-| Faithfulness | Answer sticks to retrieved context (hallucination) | > 0.9 |
-| Answer relevancy | Answer addresses the question | > 0.85 |
-| Context precision | Retrieved chunks are relevant | > 0.8 |
-| Context recall | All needed context was retrieved | > 0.8 |
-
-**Caveat to state in the writeup:** RAGAS scores are LLM-judged and noisy. Hand-label 30 examples, compute agreement with the RAGAS judge, and report that agreement as part of the result. An eval you didn't validate is just another model output.
-
-**Production rule worth citing:** if faithfulness drops, fix retrieval before touching the prompt. Hallucination is usually wrong context retrieved, not the model inventing from nothing.
-
-### Layer 2 — custom metrics (proves judgment)
-
-These are the ones no framework ships and no other candidate has:
-
-- **Hallucinated-spec rate** — from `verify_grounding`, the headline number
-- **Honest-concession rate** — on the 20 cases where the customer is right
-- **Cross-protocol refusal** — Euro NCAP vs BNCAP never compared
-- **Over-refusal rate** — reported beside refusal accuracy, always
-
-### Layer 3 — retrieval, evaluated alone
-
-Before any end-to-end number:
-
-- **Objection→category precision@1** on 60 labelled objections
-- **Hybrid ablation** — dense vs sparse vs hybrid, recall and precision
-- **Rerank ablation** — context precision and latency, with and without
-- **Fact recall** — did the join surface every fact the answer needed
-
-Measuring retrieval separately is what lets you say "this failure was retrieval, not generation" in week 9. Without it you're guessing.
+A system that refuses everything scores perfectly on the second and zero on the first. Only the pair is meaningful.
 
 ---
 
-## Tooling
+## Refusal has a required shape
 
-| Concern | Choice | Why |
-|---|---|---|
-| Orchestration | LangGraph | The objection cycle. Nowhere else |
-| Vector + sparse | pgvector + a BM25 extension | One database. No separate vector store to justify |
-| Reranker | cross-encoder (hosted or local) | Measured trade-off, per track |
-| RAG eval | RAGAS | The field-standard metrics |
-| Tracing | LangGraph checkpoints + structlog | Traces fall out of the graph for free |
+`refuse_gracefully` is not silence and it is never a fallback to general knowledge:
 
-**Still no dedicated vector database.** pgvector handles this corpus size comfortably. "I didn't need Pinecone and here's the corpus size that told me so" remains a stronger answer than adding it. Don't add infrastructure the data doesn't demand.
+**Bad:** "I don't know."
+**Bad, worse:** answering anyway from what the model already knows about Volvo or BMW generally — this is invisible unless specifically tested for, because it reads exactly like a grounded answer.
+**Good:** "That's not something I have in the documents for the XC60 — no safety-rating data is loaded for this model. Worth checking the official rating directly before answering that one."
+
+Enforced by `no_answer_outside_corpus` in `guardrails/rules.py` — full rule detail in `docs/GUARDRAILS.md`.
 
 ---
 
-## What changes in TASKS.md
+## Single generation path — every intent class, real LLM narration
 
-Phase 4 expands. Replace the old T4.2 with:
+**Superseded decision:** earlier drafts of this system templated SPEC-classified responses (retrieve a value, render through a fixed sentence, no free generation) to protect against numeric hallucination. This has been dropped in favour of natural generation for every response, to keep the unified chat interface consistent in voice — a mix of templated and generated replies read as inconsistent, which undermines the point of a single chat surface.
 
-- **T4.2a** Corpus B ingestion — parse, semantic-chunk, index warranty / service-plan / NCAP-report / manual PDFs. Every chunk sourced.
-- **T4.2b** Hybrid retrieval — dense + BM25 + reciprocal rank fusion. Ablation on the labelled set.
-- **T4.2c** Reranking — cross-encoder, top-50 → top-5. Measure precision gain and latency cost per track; decide and document.
-- **T4.3** Objection generation as LangGraph nodes (`classify`, `retrieve`, `generate`).
-- **T4.4** `verify_grounding` as the cyclic node, plus the concession rule.
-- **T4.6** (new) RAGAS harness + the 30-example judge-agreement check.
+**This moves the numeric-fidelity risk from generation-time prevention to verification-time detection, and `verify_grounding` must be strengthened to cover it explicitly:**
 
-Phase 3's retrieval evals (Layer 3 above) still come **before** any of this. Build the ruler first.
+- Extract every number/unit pair from the generated response (dimensions, prices, torque figures, whatever the query touched).
+- Check each against the retrieved chunk's actual value. Not "close enough" — exact match, or within an explicitly stated tolerance for anything legitimately approximate (e.g. rounded acceleration figures if the source itself rounds).
+- A numeric mismatch is a grounding violation: regenerate once, refuse on a second failure — same mechanism as an uncited claim.
+
+**Report numeric fidelity as its own metric**, separate from the general hallucinated-fact rate — it's a distinct failure mode (paraphrase drift, not fabrication) with a distinct cause, and conflating the two in one number hides which problem you actually have.
+
+**Latency consequence, stated plainly:** every query now costs a full generation call, including simple spec lookups that previously bypassed the model entirely. This is a real tradeoff made for response consistency, not a hidden regression — report per-intent-class latency honestly in `EVALS.md`, and lean on caching and streaming (see below) rather than reintroducing a template shortcut to hit the budget.
+
+---
+
+## Guardrail visibility inside chat
+
+Since the interface is one unified chat surface (see `docs/PRD.md` §4), citations and "what not to claim"/concession content must stay a **visually distinct part of the rendered response** — a specific sentence structure, a callout, an inline source marker — not dissolve into generic conversational prose where it can be skimmed past. This is a rendering requirement for whoever builds the chat UI, not just a generation-time concern.
+
+---
+
+## Evals
+
+| Dataset | Purpose |
+|---|---|
+| `qa.jsonl` | In-corpus questions with expected answers — drives hallucinated-fact rate, citation validity, in-corpus recall, and **numeric fidelity rate** (does every number in the response exactly match its retrieved source value) |
+| `out_of_corpus.jsonl` | 30 unanswerable questions — drives out-of-corpus refusal rate |
+| `concessions.jsonl` | 20 objections where the customer is factually right — drives honest-concession rate |
+| `redteam.jsonl` | Adversarial guardrail set — drives refusal accuracy, per rule ID |
+
+Plus RAGAS (faithfulness, answer relevancy, context precision, context recall) on the objection/comparison responses, as the standard-toolkit layer alongside the custom metrics above. Validate RAGAS itself: hand-label 30 examples, report agreement with the RAGAS judge — LLM-judged scores are noisy and unvalidated scores are just another model output.
+
+Retrieval is evaluated **standalone**, before any end-to-end number: objection→category precision, the hybrid/rerank ablations, and the `in_corpus?` threshold sweep. This is what lets a failure be attributed to retrieval or generation specifically, rather than guessed at.

@@ -23,7 +23,9 @@ from typing import Any
 def _format_value(value: float | None) -> str:
     if value is None:
         return "—"
-    return f"{value:.4f}" if isinstance(value, float) and not value.is_integer() else f"{value:g}"
+    if isinstance(value, float) and not value.is_integer():
+        return f"{value:.4f}"
+    return f"{value:g}"
 
 
 def _format_delta(before: float | None, after: float | None) -> str:
@@ -37,10 +39,6 @@ def _format_delta(before: float | None, after: float | None) -> str:
 
 
 def diff_metrics(before: dict[str, Any], after: dict[str, Any]) -> list[dict[str, Any]]:
-    """One row per scalar metric, plus one row per (path, percentile) in
-    `latency_ms`. Rows for a metric present in only one snapshot still appear,
-    with the missing side reported as `None` rather than skipped.
-    """
     before_metrics = before.get("metrics", {})
     after_metrics = after.get("metrics", {})
     rows: list[dict[str, Any]] = []
@@ -76,17 +74,14 @@ def diff_metrics(before: dict[str, Any], after: dict[str, Any]) -> list[dict[str
 
 
 def format_diff_markdown(rows: list[dict[str, Any]]) -> str:
-    lines = [
-        "| Metric | Before | After | Δ |",
-        "| --- | --- | --- | --- |",
-    ]
+    lines = ["| Metric | Before | After | Δ |", "| --- | --- | --- | --- |"]
     for row in rows:
         metric = row["metric"]
         if row["blocked_on"] is not None:
             metric = f"{metric} *(blocked on {row['blocked_on']})*"
         lines.append(
-            f"| {metric} | {_format_value(row['before'])} | {_format_value(row['after'])} "
-            f"| {_format_delta(row['before'], row['after'])} |"
+            f"| {metric} | {_format_value(row['before'])} | {_format_value(row['after'])} | "
+            f"{_format_delta(row['before'], row['after'])} |"
         )
     return "\n".join(lines)
 

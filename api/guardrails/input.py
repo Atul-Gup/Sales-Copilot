@@ -9,7 +9,15 @@ each check answers a different question about the same raw request text:
    itself (action `strip_and_log`): the offending span is stripped from the
    text that continues downstream, and the finding is logged. A pasted
    customer message is untrusted *data*, never an instruction to follow.
-2. **`out_of_scope`** — after stripping, does the (sanitized) request stay
+2. **`customer_facing`** — is this a request to draft something to hand
+   straight to a customer? Checked before `out_of_scope`, not after: this
+   tool is for the consultant, not a customer-facing drafting tool,
+   *regardless of whether the topic itself is in scope* — and in practice a
+   customer-facing draft request often doesn't name a specific model at all
+   ("confirm today's discount"), which the scope check would otherwise
+   misread as an out-of-scope topic rather than what it actually is. This
+   ordering fixed a real bug found via `evals/run_eval.py` (T3.7).
+3. **`out_of_scope`** — after stripping, does the (sanitized) request stay
    within the four-brand lineup (Volvo, BMW, Mercedes-Benz, Audi)? This is a
    brand-level check only, not a check that the specific model was ingested
    — docs/GUARDRAILS.md's own over-refusal example ("Does the EX40 have a
@@ -17,10 +25,6 @@ each check answers a different question about the same raw request text:
    (docs/CORPUS.md: "EX40 is out of scope — no India brochure was
    available"). Whether we *have data* for an in-scope brand's model is a
    retrieval/abstention concern downstream, not this guardrail's job.
-3. **`customer_facing`** — is this a request to draft something to hand
-   straight to a customer? This tool is for the consultant, not a
-   customer-facing drafting tool, regardless of whether the topic itself is
-   in scope.
 
 `run_input_guardrails` runs all three and returns the first rule triggered
 (injection stripping always happens first and does not short-circuit the
@@ -79,7 +83,13 @@ _CUSTOMER_FACING_RE = re.compile(
     r"|write .*(to|for) (the |my )?customer"
     r"|(email|text|sms|message) .*(the |my )?customer"
     r"|send (this|it|a message) (to|directly to) (the |my )?customer"
-    r"|reply to (the |my )?customer)",
+    r"|reply to (the |my )?customer"
+    # adjective phrasing ("customer-facing marketing copy") rather than
+    # "draft/write ... to/for customer" — the object precedes the audience
+    # instead of following it, so the patterns above don't match it. Real
+    # gap found via evals/run_eval.py (T3.7): "Draft some customer-facing
+    # marketing copy for the XC60's safety features" matched nothing.
+    r"|customer-facing)",
     re.IGNORECASE,
 )
 
@@ -162,12 +172,21 @@ def run_input_guardrails(text: str) -> tuple[InputGuardrailResult | None, str]:
     injection = strip_prompt_injection(text)
     sanitized = injection.sanitized_text if injection is not None else text
 
-    scope_violation = check_out_of_scope(sanitized)
-    if scope_violation is not None:
-        return scope_violation, sanitized
-
+    # customer_facing is checked before out_of_scope, not after: a request
+    # to draft something for a customer is a violation "regardless of
+    # whether the topic itself is in scope" (see module docstring) — and in
+    # practice, a customer-facing draft request often doesn't name a
+    # specific model at all ("confirm today's discount"), which would
+    # otherwise make it look like a scope violation instead of what it
+    # actually is. Real bug this order fixes, found via evals/run_eval.py
+    # (T3.7): "Write an email to send the customer confirming today's
+    # discount" was previously misreported as out_of_scope.
     customer_facing_violation = check_customer_facing(sanitized)
     if customer_facing_violation is not None:
         return customer_facing_violation, sanitized
+
+    scope_violation = check_out_of_scope(sanitized)
+    if scope_violation is not None:
+        return scope_violation, sanitized
 
     return None, sanitized

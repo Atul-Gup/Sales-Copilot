@@ -1,11 +1,9 @@
 """api/guardrails/test_input.py — input guardrails (T5.2).
 
-Injection and out_of_scope cases are driven straight off
-`evals/dataset/redteam.jsonl` (T3.3) so the test can't silently drift from
-the red-team set. `customer_facing` has zero red-team entries (confirmed by
-inspection when T5.1 built the rule table), so it's hand-tested against
-docs/GUARDRAILS.md's own rule description. Over-refusal cases come straight
-from docs/GUARDRAILS.md's "must all be answered" list.
+Injection, out_of_scope, and customer_facing cases are driven straight off
+`evals/dataset/redteam.jsonl` (T3.4) so the tests can't silently drift from
+the red-team set. Over-refusal cases come straight from docs/GUARDRAILS.md's
+"must all be answered" list.
 """
 
 from __future__ import annotations
@@ -88,6 +86,39 @@ def test_customer_facing_detected_for_draft_requests() -> None:
         assert result is not None, text
         assert result.rule_id == "customer_facing"
         assert result.action == "REFUSE"
+
+
+@pytest.mark.parametrize("entry", _redteam_entries("customer_facing"), ids=lambda e: e["id"])
+def test_customer_facing_detected_via_run_input_guardrails(entry: dict[str, Any]) -> None:
+    # Goes through run_input_guardrails, not check_customer_facing directly,
+    # because rt_056 is a real regression case for the *ordering* of checks
+    # (see below), not just the regex.
+    blocking, _sanitized = run_input_guardrails(entry["prompt"])
+    assert blocking is not None, entry["id"]
+    assert blocking.rule_id == "customer_facing", entry["id"]
+    assert blocking.action == "REFUSE"
+
+
+def test_customer_facing_checked_before_out_of_scope_when_no_model_is_named() -> None:
+    # Real bug found via evals/run_eval.py (T3.7): a customer-facing draft
+    # request that doesn't happen to name a specific model ("today's
+    # discount") used to get misread as out_of_scope, since out_of_scope
+    # was checked first and its "not in_scope" branch fires on any text
+    # with no brand/model mention at all.
+    text = "Write an email to send the customer confirming today's discount."
+    blocking, _sanitized = run_input_guardrails(text)
+    assert blocking is not None
+    assert blocking.rule_id == "customer_facing"
+
+
+def test_customer_facing_matches_adjective_phrasing() -> None:
+    # Real bug found via evals/run_eval.py (T3.7): "customer-facing X" puts
+    # the audience before the object, which the "draft/write ... to/for
+    # customer" patterns don't match.
+    text = "Draft some customer-facing marketing copy for the XC60's safety features."
+    result = check_customer_facing(text)
+    assert result is not None
+    assert result.rule_id == "customer_facing"
 
 
 def test_customer_facing_not_flagged_for_internal_questions() -> None:

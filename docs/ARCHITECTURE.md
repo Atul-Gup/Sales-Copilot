@@ -1,157 +1,138 @@
 # ARCHITECTURE — Showroom Copilot
 
+Supersedes the structured-fact-table / two-corpus design from earlier drafts.
+
 ---
 
-## The central idea
+## The central idea, restated for this version
 
-**Citation is enforced by the schema, not by the prompt.**
+**The system may only state what a retrieved document supports, and must say so plainly when nothing does.**
 
-Every fact lives in a row that carries a `source_id`. The retrieval API can only return facts joined to a source. The model therefore cannot cite something that doesn't exist, because it never sees an uncited fact.
+There is no structured fact database to query directly anymore — no SQL fast path, no `specs`/`features`/`safety_ratings` tables. The corpus is a small set of reformatted product documents, chunked and embedded. Every answer, including simple spec lookups, goes through retrieval. What varies is how the response gets generated afterward — see the templated-vs-generated split below — not whether retrieval happens.
 
-Everything else in this architecture follows from that.
-
-## Three paths, three latency budgets
+## One retrieval path, one gate that matters
 
 ```
-                    ┌── router (small model, ~80ms)
+                    ┌── classify_intent (SPEC | COMPARISON | OBJECTION)
+                    │    used to pick prompt/template, NOT to skip retrieval
    query ───────────┤
-                    ├─ SPEC ──────→ SQL ─────────────────→  < 500ms
-                    ├─ COMPARISON ─→ precomputed card ────→  < 1s
-                    └─ OBJECTION ──→ retrieve → generate →  < 2s p95
+                    └─ retrieve (hybrid: dense + BM25 + RRF, reranked)
+                           │
+                    in_corpus? (calibrated threshold, not a default cutoff)
+                       │no                    │yes
+                       ▼                       ▼
+                  refuse_gracefully       generate
+                  (name what's missing)   (template for SPEC,
+                                            LLM narration for
+                                            COMPARISON/OBJECTION)
+                                                │
+                                          verify_grounding
+                                                │
+                                    violation? loop once → refuse
+                                                │no
+                                                ▼
+                                       render (citations + "don't
+                                       claim" content stay visible
+                                       inside the chat response)
 ```
 
-Spec lookups never touch an LLM. Comparisons for known pairs are generated offline and served from cache. Only objection handling runs the full pipeline.
-
-This is the entire latency story and it's what you'll be asked about in interviews.
+`in_corpus?` is the most important node in this graph. Retrieval will always return its nearest top-k chunks, whether or not any of them actually answer the question — cosine similarity doesn't know the difference between "relevant" and "least irrelevant." The threshold must be calibrated against labelled in-corpus and out-of-corpus question sets, not left at a library default. Full detail in `docs/RETRIEVAL.md`.
 
 ## Data model
 
 ```sql
 sources
-  id, kind, publisher, url, document_title,
-  retrieved_at, verified_at, checksum
+  id, kind, publisher, document_title, retrieved_at, checksum
+  -- kind: 'product_document' | 'service_centre_list'
 
-brands           id, name, segment
-models           id, brand_id, name, body_type, status
-variants         id, model_id, name, powertrain, ex_showroom_paise,
-                 price_source_id, launched_on
+chunks
+  id, source_id NOT NULL, document_id, text, embedding vector(1536),
+  section, page
+  -- text is stored alongside the vector so retrieval can cite and
+  -- render the actual passage, not just locate it
 
-specs            id, variant_id, attribute, value_text, value_num, unit,
-                 source_id NOT NULL, verified, verified_at
+service_centres
+  id, brand, city, state, address, source_id NOT NULL
+  -- structured, separate from the chunked corpus; queried by direct
+  -- lookup, not retrieval
 
-features         id, variant_id, feature_key, availability, cost_paise,
-                 source_id NOT NULL
-                 -- availability: standard | optional | unavailable
-                 -- this column is how the Volvo standard-kit advantage
-                 -- becomes measurable rather than rhetorical
-
-safety_ratings   id, model_id, protocol, year, adult_score, child_score,
-                 assist_score, max_score, report_source_id NOT NULL
-                 -- protocol: euro_ncap | bharat_ncap | global_ncap
-                 -- NEVER compare rows across different protocols
-
-service_centres  id, brand_id, city, state, address, source_id
-resale_estimates id, model_id, years, retained_pct, source_id, methodology
-
-objections       id, text, category, severity
-objection_facts  objection_id, spec_id | feature_id | rating_id
-                 -- which facts are relevant to which objection
-
-battle_cards     id, variant_a, variant_b, content_json,
-                 generated_at, stale_after
+models        id, brand, name, status
+              -- e.g. Volvo XC60, BMW X3 — no separate variant/spec tables;
+              -- facts about a model live in its document's chunks
 ```
 
-**`source_id NOT NULL` on every fact table is the load-bearing constraint.** Do not relax it. If a fact has no source, it does not go in the database.
+**`source_id NOT NULL` is still enforced everywhere.** Collapsing to one corpus type didn't relax the citation discipline — it just means every fact traces to a chunk instead of to a structured row.
 
-**`availability` on features** is what turns "Volvo gives you more as standard" from a sales claim into an arithmetic one. Sum the optional-cost column on the German competitor and you have a defensible equipped-price comparison.
+Note what's gone from the earlier schema: `specs`, `features`, `safety_ratings`, `resale_estimates`, `objection_facts`, `battle_cards`. None of these exist. If a future session proposes recreating them, that's a sign the corpus scope has grown back toward structured data and `docs/CORPUS.md` needs updating first.
 
 ## Repo layout
 
 ```
 showroom-copilot/
 ├── AGENTS.md
-├── docs/            PRD, ARCHITECTURE, GUARDRAILS, TASKS
+├── docs/            PRD, ARCHITECTURE, GUARDRAILS, CORPUS, RETRIEVAL, TASKS
 ├── api/
-│   ├── routers/     spec, compare, objection, health
+│   ├── routers/     chat (single endpoint), health
 │   ├── services/
-│   │   ├── router.py        query classification
-│   │   ├── spec_query.py    SQL path, no LLM
-│   │   ├── compare.py       battle card lookup + fallback
-│   │   ├── objection.py     retrieve → generate → verify
-│   │   └── tco.py           five-year calculation
+│   │   ├── router.py         intent classification (prompt selection only)
+│   │   ├── retrieve.py       hybrid retrieval + rerank + in_corpus gate
+│   │   ├── generate.py       templated (SPEC) vs LLM narration (COMPARISON/OBJECTION)
+│   │   └── verify.py         grounding check, the LangGraph cycle
 │   ├── guardrails/
-│   │   ├── input.py         injection, scope
-│   │   ├── output.py        citation check, protocol check, concession
-│   │   └── rules.py         rules as data, not scattered prompt text
-│   ├── llm/client.py        the ONLY vendor SDK import
+│   │   ├── input.py          injection, scope
+│   │   ├── output.py         citation check, concession check, refusal check
+│   │   └── rules.py          rules as data — see GUARDRAILS.md
+│   ├── llm/
+│   │   ├── client.py         the ONLY vendor SDK import (chat model)
+│   │   └── embeddings.py     OpenAI text-embedding-3-small, cached
 │   └── models/
 ├── ingest/
-│   ├── volvo.py, bmw.py, mercedes.py, audi.py
-│   ├── euroncap.py, service_centres.py
-│   └── validate.py          rejects any fact without a source
+│   ├── product_docs.py       parse, chunk, embed the Word/PDF corpus
+│   ├── service_centres.py    structured spreadsheet ingest
+│   └── validate.py           rejects anything without a source
 ├── evals/
 │   ├── dataset/
-│   │   ├── specs.jsonl          150 verifiable Q&A
-│   │   ├── concessions.jsonl    20 where the customer is right
-│   │   ├── redteam.jsonl        40 adversarial
-│   │   └── tco.jsonl            30 hand-computed
+│   │   ├── qa.jsonl              in-corpus questions with expected answers
+│   │   ├── out_of_corpus.jsonl   30 questions with no supporting document
+│   │   ├── concessions.jsonl     20 objections where the customer is right
+│   │   └── redteam.jsonl         adversarial guardrail set
 │   ├── metrics.py
 │   ├── run_eval.py
-│   └── results/                 committed — this is the improvement narrative
-├── web/                         Next.js, mobile-first
-└── .github/workflows/eval.yml   runs on every PR
+│   └── results/                   committed — the improvement narrative
+├── web/                            single chat interface, mobile-first
+└── .github/workflows/eval.yml
 ```
+
+## Single generation path, strengthened verification
+
+All intent classes generate through the LLM — there is no templated-vs-generated split. This was a deliberate reversal from an earlier draft: templating SPEC responses protected numeric fidelity at generation time, but produced an inconsistent voice across a unified chat interface, which defeats the point of having one.
+
+The numeric-fidelity protection moved downstream into `verify_grounding` instead: every number/unit the response states is checked against its retrieved source value, exact match (or an explicit stated tolerance), and a mismatch is a grounding violation — same regenerate-once-then-refuse mechanism as an uncited claim. **This trades a generation-time guarantee for a verification-time check**, and the honest cost is that every query, including simple spec lookups, now makes a full generation call — see the latency section below and report per-intent-class numbers rather than an aggregate.
 
 ## Eval metric definitions
 
-Precise definitions so the agent implements them consistently.
+- **Hallucinated-fact rate** — responses containing a claim with no corresponding retrieved chunk, over total responses. Headline metric.
+- **Numeric fidelity rate** — of numbers/units stated in a response, the share that exactly match their retrieved source value. Distinct from hallucinated-fact rate: this catches paraphrase drift (483L restated as "around 480L") rather than fabrication from nothing, and it exists specifically because there's no template anchoring numeric output anymore.
+- **In-corpus recall** — of questions genuinely answerable from the documents, the share correctly answered rather than refused.
+- **Out-of-corpus refusal rate** — of questions with no supporting document, the share correctly refused rather than answered from general knowledge. Report with recall, never alone — a system that refuses everything scores perfectly on one and zero on the other.
+- **Citation validity** — cited passages that actually contain the claim, over total citations.
+- **Honest-concession rate** — on `concessions.jsonl`, the share where the response explicitly acknowledges a valid customer objection rather than deflecting. LLM-judged, validated against hand-labels, agreement rate reported.
+- **Refusal accuracy / over-refusal rate** — on `redteam.jsonl` and `qa.jsonl` respectively, always reported as a pair.
+- **Latency** — p50/p95, reported per query classification, not aggregated.
 
-**Hallucinated-spec rate** — responses containing a factual claim with no corresponding database row, over total responses. Detected by extracting claims and matching against `specs` and `features`. This is the headline metric.
+## Guardrails as data
 
-**Citation validity** — cited sources where the source document actually contains the claim, over total citations. Verified by substring and semantic match against the stored source text.
-
-**Honest-concession rate** — on `concessions.jsonl` (20 objections where the customer is factually correct), the share where the response explicitly acknowledges the point rather than deflecting. Scored by an LLM judge against a rubric, with all 20 also hand-scored to validate judge agreement. **Report the agreement percentage.**
-
-**Refusal accuracy** — correct refusals on `redteam.jsonl` over total red-team prompts.
-
-**Over-refusal rate** — legitimate questions incorrectly refused, over total legitimate questions. Measured on `specs.jsonl`. Always reported next to refusal accuracy.
-
-**TCO accuracy** — five-year cost within 2% of the hand-computed figure, over 30 cases.
-
-**Latency** — p50 and p95, reported **separately per path**. An aggregate number hides the routing story.
-
-## Guardrail implementation
-
-Rules live in `guardrails/rules.py` as data, not as prose scattered through prompts:
-
-```python
-Rule(
-    id="cross_protocol_safety",
-    check=lambda r: not compares_across_protocols(r),
-    on_violation=REFUSE,
-    message="Euro NCAP and Bharat NCAP use different protocols "
-            "and cannot be compared directly.",
-)
-```
-
-Why this matters: rules as data are testable, countable, and reportable per rule. Rules embedded in prompt text are none of those things. Your red-team report is a table of rule IDs against violation counts — which is only possible if the rules have IDs.
-
-Output guardrails run **after** generation and **before** the response returns. A violation triggers one regeneration attempt, then refusal.
+Rules live in `guardrails/rules.py`, each with an ID, a check, an action, and a test. Not prose scattered through prompts — see `docs/GUARDRAILS.md` for the current rule set, headlined by `no_answer_outside_corpus`.
 
 ## Deployment
 
-- API on Railway or Fly.io, Postgres managed
-- Web on Vercel
-- Ingestion as a scheduled job, weekly, writing a new `verified_at`
-- Secrets in the platform's secret store, never in the repo
+API on Railway or Fly, Postgres managed with pgvector, web on Vercel. Ingestion is a manual/scheduled step against `data/sources/products/` — see `docs/CORPUS.md` for exactly what's in scope.
 
 ## Decisions to record in the README
 
-Each of these has a defensible rationale and an alternative you rejected. These are your interview material — write them down as you make them, not at the end.
-
-1. Postgres with pgvector rather than a dedicated vector database
-2. SQL for spec lookups rather than routing everything through retrieval
-3. `source_id NOT NULL` rather than prompt-level citation instructions
-4. Precomputed battle cards rather than generating comparisons on demand
-5. Guardrails as data rather than as prompt text
-6. Prices as integer paise rather than floats
+1. Single document corpus over structured fact tables + separate narrative corpus — the documents were already well-formatted; two layers added complexity without adding accuracy.
+2. Closed-book refusal (`no_answer_outside_corpus`) over broader, less-verified coverage — a smaller corpus the system stays honest about beats a broader one it might silently supplement from training data.
+3. Calibrated `in_corpus?` threshold over a default similarity cutoff, and why that calibration mattered in practice.
+4. Full LLM generation for every response, over an earlier templated-SPEC-path draft — chosen for consistent voice across the unified chat interface, with the resulting numeric-fidelity risk covered by strengthening `verify_grounding` rather than by templating around it. State the latency cost this added honestly.
+5. Unified chat interface over separate comparison/objection/spec screens, and how guardrail visibility was preserved inside natural-language responses.
+6. EX30 shipping with zero competitors rather than a mismatched one — a data-honesty decision, not an oversight.

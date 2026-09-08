@@ -6,7 +6,7 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from api.models import Base, Brand, CarModel, Feature, SafetyRating, Source, Spec, Variant
+from api.models import Base, Chunk, Model, ServiceCentre, Source
 
 
 @pytest.fixture
@@ -25,87 +25,69 @@ def session() -> Generator[Session]:
 
 
 @pytest.fixture
-def variant(session: Session) -> Variant:
-    source = Source(
-        kind="oem_site",
+def source(session: Session) -> Source:
+    row = Source(
+        kind="product_document",
         publisher="Volvo Cars India",
-        url="https://www.volvocars.com/in",
+        url="https://www.volvocars.com/in/xc60",
+        document_title="Volvo XC60 product document",
         retrieved_at=datetime.now(UTC),
     )
-    session.add(source)
+    session.add(row)
     session.flush()
+    return row
 
-    brand = Brand(name="Volvo", segment="luxury")
-    session.add(brand)
+
+@pytest.fixture
+def model(session: Session) -> Model:
+    row = Model(brand="Volvo", name="XC60", status="active")
+    session.add(row)
     session.flush()
-
-    model = CarModel(brand_id=brand.id, name="XC60", body_type="suv", status="active")
-    session.add(model)
-    session.flush()
-
-    variant = Variant(
-        model_id=model.id,
-        name="XC60 B5 Inscription",
-        powertrain="mild_hybrid_petrol",
-        ex_showroom_paise=6_490_000_00,
-        price_source_id=source.id,
-    )
-    session.add(variant)
-    session.flush()
-    return variant
+    return row
 
 
-def test_spec_requires_a_source(session: Session, variant: Variant) -> None:
-    session.add(Spec(variant_id=variant.id, attribute="boot_space_litres", value_num=709))
-    with pytest.raises(IntegrityError):
-        session.flush()
-
-
-def test_feature_requires_a_source(session: Session, variant: Variant) -> None:
+def test_chunk_requires_a_source(session: Session, model: Model) -> None:
     session.add(
-        Feature(variant_id=variant.id, feature_key="panoramic_roof", availability="standard")
+        Chunk(document_id=model.id, text="Boot space is 709 litres.", embedding=[0.0] * 1536)
     )
     with pytest.raises(IntegrityError):
         session.flush()
 
 
-def test_safety_rating_requires_a_source(session: Session, variant: Variant) -> None:
+def test_chunk_with_a_source_is_inserted(session: Session, source: Source, model: Model) -> None:
     session.add(
-        SafetyRating(
-            model_id=variant.model_id,
-            protocol="euro_ncap",
-            year=2024,
-            tested_variant="XC60 D4 AWD, LHD",
-            status="expired",
-            adult_score=34,
-            child_score=44,
-            vru_score=21,
-            assist_score=13,
+        Chunk(
+            source_id=source.id,
+            document_id=model.id,
+            text="Boot space is 709 litres.",
+            embedding=[0.0] * 1536,
         )
     )
+    session.flush()
+
+    stored = session.query(Chunk).one()
+    assert stored.source_id == source.id
+
+
+def test_service_centre_requires_a_source(session: Session) -> None:
+    session.add(
+        ServiceCentre(brand="Volvo", city="Bengaluru", state="Karnataka", address="Whitefield")
+    )
     with pytest.raises(IntegrityError):
         session.flush()
 
 
-def test_spec_with_a_source_is_inserted(session: Session, variant: Variant) -> None:
-    source = Source(
-        kind="oem_site",
-        publisher="Volvo Cars India",
-        url="https://www.volvocars.com/in/xc60/specs",
-        retrieved_at=datetime.now(UTC),
-    )
-    session.add(source)
-    session.flush()
-
+def test_service_centre_with_a_source_is_inserted(session: Session, source: Source) -> None:
     session.add(
-        Spec(
-            variant_id=variant.id,
-            attribute="boot_space_litres",
-            value_num=709,
+        ServiceCentre(
+            brand="Volvo",
+            city="Bengaluru",
+            state="Karnataka",
+            address="Whitefield",
             source_id=source.id,
         )
     )
     session.flush()
 
-    stored = session.query(Spec).one()
+    stored = session.query(ServiceCentre).one()
     assert stored.source_id == source.id
