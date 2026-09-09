@@ -69,7 +69,7 @@ from sqlalchemy.orm import Session
 from api.guardrails.input import run_input_guardrails
 from api.llm.client import LLMClient
 from api.models import Chunk, Model, QueryEvent, ServiceCentre
-from api.services.concede import concede
+from api.services.concede import NEVER_INGESTED_TOPIC_RE, concede
 from api.services.retrieve import IN_CORPUS_THRESHOLD, hybrid_search_scored
 from api.services.router import QueryType, classify, mentioned_entities, normalize_model_spacing
 from api.services.verify import VerifiedGenerationResult, generate_with_verification
@@ -84,14 +84,6 @@ _ASSUMED_KNOWLEDGE_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Topics docs/CORPUS.md guarantees are absent from every ingested document,
-# for every model — no amount of retrieval score should overcome that.
-_NEVER_INGESTED_TOPIC_RE = re.compile(
-    r"\beuro\s*ncap\b|\bcrash test\b|\bstar rating\b|\bsafety rating\b|"
-    r"\bwarranty\b|\bservice plan\b|\bmaintenance package\b",
-    re.IGNORECASE,
-)
-
 
 def _is_framing_pressure_for_uncorpused_topic(query: str) -> bool:
     # The EX30 is the one documented exception (evals/dataset/out_of_corpus
@@ -100,9 +92,7 @@ def _is_framing_pressure_for_uncorpused_topic(query: str) -> bool:
     # must not be force-refused here — let the normal gate handle it.
     if "ex30" in normalize_model_spacing(query.lower()):
         return False
-    return bool(_ASSUMED_KNOWLEDGE_RE.search(query)) and bool(
-        _NEVER_INGESTED_TOPIC_RE.search(query)
-    )
+    return bool(_ASSUMED_KNOWLEDGE_RE.search(query)) and bool(NEVER_INGESTED_TOPIC_RE.search(query))
 
 
 _MODEL_NAMES = {
@@ -148,6 +138,17 @@ class AnswerResult:
     top_score: float
     verification: VerifiedGenerationResult | None
     blocked_by_input_guardrail: str | None = None
+    # Which guardrail actually caused a refusal, distinct from `refused`
+    # itself — T7.7's warnings need to know *why*, not just that it
+    # happened. "no_answer_outside_corpus" covers every path that refuses
+    # because the corpus has no supporting document (an out_of_scope input
+    # block, the framing-pressure override, or a plain in_corpus? gate
+    # miss); "grounding_violation" covers a refusal from `verify_grounding`
+    # giving up after two attempts, which is a different failure mode (the
+    # corpus had something, but generation couldn't produce a verifiably
+    # grounded answer from it) and intentionally not labelled
+    # no_answer_outside_corpus.
+    refusal_reason: str | None = None
 
 
 def _known_volvo_service_cities(session: Session) -> frozenset[str]:
@@ -158,8 +159,14 @@ def _model_labels(session: Session, chunks: list[Chunk]) -> dict[int, str]:
     """`Model.id -> "Brand Name"` for the models these chunks belong to —
     see `generate.py::generate`'s docstring for why this matters: most
     chunk text has no model name in it at all, which is a confirmed real
-    cause of a figure getting attributed to the wrong model."""
-    document_ids = {chunk.document_id for chunk in chunks}
+    cause of a figure getting attributed to the wrong model.
+
+    `document_id` is nullable (a chunk with no single owning model, e.g.
+    the objection-handling guide's General items — `ingest/
+    objection_guide.py`) — excluded here rather than passed into `.in_()`,
+    since there's no model to look up for it anyway.
+    """
+    document_ids = {chunk.document_id for chunk in chunks if chunk.document_id is not None}
     models = session.query(Model).filter(Model.id.in_(document_ids)).all()
     return {m.id: f"{m.brand} {m.name}" for m in models}
 
@@ -242,6 +249,7 @@ def _answer(
 ) -> AnswerResult:
     blocking, sanitized_query = run_input_guardrails(query)
     if blocking is not None:
+        is_scope_block = blocking.rule_id == "out_of_scope"
         return AnswerResult(
             text=blocking.message,
             refused=True,
@@ -250,6 +258,7 @@ def _answer(
             top_score=0.0,
             verification=None,
             blocked_by_input_guardrail=blocking.rule_id,
+            refusal_reason="no_answer_outside_corpus" if is_scope_block else None,
         )
 
     intent = classify(sanitized_query)
@@ -262,14 +271,19 @@ def _answer(
             intent=intent,
             top_score=0.0,
             verification=None,
+            refusal_reason="no_answer_outside_corpus",
         )
 
     concession = concede(sanitized_query, session)
     if concession is not None:
         return AnswerResult(
-            text=concession,
+            text=concession.text,
             refused=False,
-            conceded=True,
+            # Only badge this as a concession when the real data actually
+            # shows a Volvo weakness — a service-network query that comes
+            # out favourable/tied for Volvo is an honest fact-check, not a
+            # concession, and must not carry the must_concede warning.
+            conceded=concession.is_weakness,
             intent=intent,
             top_score=1.0,
             verification=None,
@@ -286,6 +300,7 @@ def _answer(
             intent=intent,
             top_score=top_score,
             verification=None,
+            refusal_reason="no_answer_outside_corpus",
         )
 
     chunks = [sc.chunk for sc in scored]
@@ -307,4 +322,5 @@ def _answer(
         intent=intent,
         top_score=top_score,
         verification=verification,
+        refusal_reason="grounding_violation" if verification.refused else None,
     )

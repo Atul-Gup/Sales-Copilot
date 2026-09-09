@@ -32,21 +32,38 @@ export function getHealth(): Promise<HealthStatus> {
   return request<HealthStatus>("/health");
 }
 
-// Mirrors api/routers/chat.py::ChatCitation.
-export type ChatCitation = {
-  marker: number;
-  section: string | null;
+// Mirrors api/routers/chat.py::Claim (T7.7). One entry per `[n]` marker
+// actually cited in `response`, in the order those markers appear — built
+// server-side from api/services/verify.py::extract_claims, the same
+// per-sentence parsing verify_grounding already does. No `marker` number is
+// exposed here on purpose (it's an internal chunk-offer-order detail); the
+// frontend correlates a claim to its `[n]` occurrence in `response` by
+// position, not by number — see `renderResponseWithCitations` below.
+export type Claim = {
+  text_span: string;
+  chunk_id: number;
+  source: string;
+};
+
+// Mirrors api/routers/chat.py::Warning (T7.7). `type` is one of
+// "must_concede" | "no_answer_outside_corpus" | "disparagement" today —
+// kept as `string` here rather than a union so an unrecognized future type
+// still renders (as a generic callout) instead of a TypeScript narrowing
+// error.
+export type Warning = {
+  type: string;
   text: string;
 };
 
-// Mirrors api/routers/chat.py::ChatResponse — one shape for every intent
-// class (SPEC/COMPARISON/OBJECTION), per T7.1's single generation path.
+// Mirrors api/routers/chat.py::ChatResponse (T7.7) — replaced the old flat
+// `{text, refused, conceded, intent, citations}` shape. `refused`/`conceded`
+// are gone: the frontend now derives refusal/concession styling from
+// `warnings` (a `no_answer_outside_corpus` or `must_concede` entry) instead
+// of separate booleans — see AssistantBubble in app/page.tsx.
 export type ChatResponse = {
-  text: string;
-  refused: boolean;
-  conceded: boolean;
-  intent: "SPEC" | "COMPARISON" | "OBJECTION" | null;
-  citations: ChatCitation[];
+  response: string;
+  claims: Claim[];
+  warnings: Warning[];
 };
 
 export function postChat(query: string): Promise<ChatResponse> {

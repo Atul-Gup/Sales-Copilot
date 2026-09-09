@@ -31,6 +31,7 @@ ALLOWED_PRODUCT_DOCUMENT_TITLES = frozenset(
         "BMW X3 product document",
         "Mercedes GLC product document",
         "Audi Q5 product document",
+        "Volvo Objection Handling Guide",
     }
 )
 

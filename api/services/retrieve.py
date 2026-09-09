@@ -42,7 +42,21 @@ RRF_K = 60
 # separate in-corpus from out-of-corpus smoothly without a reranker (see
 # docs/RETRIEVAL.md's "T3.6 finding" and evals/results/threshold_calibration
 # .md). Revisit if reranking (T2.2) is ever revisited.
-IN_CORPUS_THRESHOLD = 0.031778
+#
+# Recalibrated after live testing against a 90-question real-world product
+# test set (docs/CORPUS.md's objection-handling guide ingestion added 28
+# chunks to the corpus after T3.6's original calibration ran — that shifted
+# score distributions enough that the old 0.031778 value now only clears
+# 84% of qa.jsonl's own ground truth, rescored against the current corpus,
+# not the 100% it was chosen for). 0.031099 is the lowest qa.jsonl score
+# found, live, against the current corpus — the same "100% in-corpus
+# recall, best available refusal rate" philosophy T3.6 used, just rerun
+# against today's corpus shape. Still not a clean separation (a reranker,
+# T2.2, dropped, would be the real fix) — some genuine product questions
+# can still score below this and get a false refusal; this only closes the
+# gap that live testing actually found, not the underlying score-overlap
+# problem itself.
+IN_CORPUS_THRESHOLD = 0.031099
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 

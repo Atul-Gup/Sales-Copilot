@@ -30,6 +30,11 @@ violations (uncited competitor claims, disparagement, service overstatement,
 price/promise/certainty violations) are folded into the same
 `violations` list and go through the same regenerate-once-then-refuse cycle
 rather than a second, separate loop.
+
+`extract_claims`/`Claim` (T7.7) give `POST /chat` a structured citation per
+claim (which chunk, which document/section) instead of a flat citation list
+scoped to the whole response — built from this module's own marker parsing,
+not a second extraction step over the response text.
 """
 
 from __future__ import annotations
@@ -61,16 +66,32 @@ REFUSAL_TEXT = (
 )
 
 
+_UNIT_SUFFIX_RE = re.compile(r"^(\d[\d,]*\.?\d*)[A-Za-z]+$")
+
+
 def _extract_numbers(text: str) -> set[str]:
-    """Whole-token digit runs only, so a model name like "XC60" doesn't
-    contribute a spurious "60". Mirrors evals/metrics.py::_extract_numbers's
-    heuristic exactly, duplicated rather than imported: api/ must not depend
-    on evals/, which already depends on api/ the other way around."""
+    """Digit runs at the start of a token, so a model name like "XC60"
+    doesn't contribute a spurious "60" (it starts with a letter), but a
+    unit glued straight onto a figure with no space — source text spells it
+    "48V", the model naturally writes "48 V" — still counts as the same
+    number. Real bug found via live testing: "48V" in a chunk and "48 V" in
+    the generated answer are the same fact, but a whole-token-only match
+    treated them as different, causing a false grounding-violation refusal
+    on an otherwise fully correct answer. Mirrors evals/metrics.py::
+    _extract_numbers's heuristic, duplicated rather than imported: api/
+    must not depend on evals/, which already depends on api/ the other
+    way around."""
     numbers = set()
     for token in _TOKEN_RE.findall(text):
         cleaned = token.strip(".,")
-        if cleaned and _PURE_NUMBER_RE.fullmatch(cleaned):
+        if not cleaned:
+            continue
+        if _PURE_NUMBER_RE.fullmatch(cleaned):
             numbers.add(cleaned.replace(",", ""))
+            continue
+        unit_match = _UNIT_SUFFIX_RE.match(cleaned)
+        if unit_match:
+            numbers.add(unit_match.group(1).replace(",", ""))
     return numbers
 
 
@@ -84,6 +105,42 @@ def _split_claims(text: str) -> list[str]:
 class GroundingViolation:
     claim: str
     reason: str
+
+
+@dataclass(frozen=True)
+class Claim:
+    """One customer-facing claim and the specific chunk it cites — the
+    structured shape `POST /chat` needs for T7.7's citation UI.
+
+    Built by `extract_claims` from the exact same per-sentence/per-marker
+    parsing `find_grounding_violations` already does (`_split_claims`,
+    `_CITATION_MARKER_RE`, `citations_by_marker`) — not a second, separate
+    extraction pass over the response text. A fabricated marker (cited but
+    not actually offered to the model) is silently skipped here rather than
+    surfaced as a claim; `find_grounding_violations` is what catches and
+    reports that case, and a fabricated marker never reaches `accept` in the
+    verify_grounding loop below, so it can't appear in a `Claim` that ships
+    to the frontend.
+    """
+
+    text_span: str
+    chunk_id: int
+    source: str
+
+
+def extract_claims(result: GenerationResult) -> list[Claim]:
+    citations_by_marker = {c.marker: c for c in result.citations}
+    claims: list[Claim] = []
+    for claim_text in _split_claims(result.text):
+        for marker in (int(m) for m in _CITATION_MARKER_RE.findall(claim_text)):
+            citation = citations_by_marker.get(marker)
+            if citation is None:
+                continue
+            source = citation.model_label or "source document"
+            if citation.section:
+                source = f"{source} — {citation.section}"
+            claims.append(Claim(text_span=claim_text, chunk_id=citation.chunk_id, source=source))
+    return claims
 
 
 def _output_guardrail_violations(
@@ -105,18 +162,39 @@ def find_grounding_violations(result: GenerationResult) -> list[GroundingViolati
     is `api/guardrails/output.py::check_uncited_claim`'s job, not this
     module's; this module is specifically the numeric-fidelity strengthening
     docs/RETRIEVAL.md calls for.
+
+    A single-source answer (one chunk backing the whole paragraph) is, in
+    live practice, reliably written with one trailing marker at the end of
+    the last sentence rather than one per sentence — confirmed via testing
+    every objection-guide item, where this was the majority shape for
+    SPEC/OBJECTION answers. Requiring a marker on every individual sentence
+    made that the normal, correct case refuse. So an unmarked numeric claim
+    is allowed to borrow the *next* claim's marker(s) if that next claim
+    carries any — its numbers still have to actually appear in that cited
+    chunk's text, so a wrong-chunk attribution (the real T4.3 failure mode)
+    is still caught; only the requirement that the marker sit on the exact
+    same sentence is relaxed.
     """
     citations_by_marker = {c.marker: c for c in result.citations}
+    claims = _split_claims(result.text)
+    parsed = [(claim, [int(m) for m in _CITATION_MARKER_RE.findall(claim)]) for claim in claims]
     violations = []
-    for claim in _split_claims(result.text):
-        markers = [int(m) for m in _CITATION_MARKER_RE.findall(claim)]
+    for index, (claim, markers) in enumerate(parsed):
         claim_numbers = _extract_numbers(_CITATION_MARKER_RE.sub("", claim))
         if not claim_numbers:
             continue
 
         if not markers:
-            violations.append(GroundingViolation(claim, "numeric claim with no citation marker"))
-            continue
+            # Borrow the next sentence's marker(s), if any — see docstring.
+            for _, next_markers in parsed[index + 1 :]:
+                if next_markers:
+                    markers = next_markers
+                    break
+            if not markers:
+                violations.append(
+                    GroundingViolation(claim, "numeric claim with no citation marker")
+                )
+                continue
 
         cited_numbers: set[str] = set()
         fabricated_markers = [m for m in markers if m not in citations_by_marker]
@@ -141,6 +219,41 @@ def find_grounding_violations(result: GenerationResult) -> list[GroundingViolati
     return violations
 
 
+def _build_retry_feedback(
+    violations: list[GroundingViolation], result: GenerationResult | None
+) -> str | None:
+    """Turn attempt 1's violations into retry guidance. For a wrong-chunk
+    number mismatch, name which marker actually has the number instead of
+    just naming what was wrong — a real failure mode found via live
+    testing: telling the model only "number X not found in chunk [2]" made
+    it retry by dropping the sentence into chunk [2] anyway (now attached
+    to the wrong marker in a *different* way) rather than moving it to the
+    chunk that actually has it. Every citation is one of the chunks that
+    was already offered to the model, so pointing at marker [6] instead of
+    [2] isn't handing it new information, just narrowing its own search.
+    """
+    if not violations:
+        return None
+    if result is None:
+        return "; ".join(v.reason for v in violations)
+
+    parts = []
+    for v in violations:
+        match = re.search(r"number\(s\) \[(.*?)\] not found in cited chunk", v.reason)
+        if match is None:
+            parts.append(v.reason)
+            continue
+        missing = {n.strip(" '") for n in match.group(1).split(",")}
+        correct_markers = [
+            c.marker for c in result.citations if missing <= _extract_numbers(c.text)
+        ]
+        if correct_markers:
+            parts.append(f"{v.reason} — use marker {correct_markers} for these numbers instead")
+        else:
+            parts.append(v.reason)
+    return "; ".join(parts)
+
+
 class _VerifyGroundingState(TypedDict):
     query: str
     chunks: list[Chunk]
@@ -157,6 +270,11 @@ class _VerifyGroundingState(TypedDict):
 
 
 def _generate_node(state: _VerifyGroundingState) -> dict[str, Any]:
+    # On a retry, hand back the first attempt's own violations as feedback —
+    # with temperature=0.0 (generate.py) a blind retry reproduces the exact
+    # same text and violation every time, so the regenerate-once step is a
+    # no-op without this.
+    retry_feedback = _build_retry_feedback(state["violations"], state["result"])
     result = generate(
         state["query"],
         state["chunks"],
@@ -164,6 +282,7 @@ def _generate_node(state: _VerifyGroundingState) -> dict[str, Any]:
         llm=state["llm"],
         model=state["model"],
         model_labels=state["model_labels"],
+        retry_feedback=retry_feedback,
     )
     return {"result": result, "attempt": state["attempt"] + 1}
 
@@ -226,6 +345,7 @@ class VerifiedGenerationResult:
     attempts: int
     violations: list[GroundingViolation] = field(default_factory=list)
     generation: GenerationResult | None = None
+    claims: list[Claim] = field(default_factory=list)
 
 
 def generate_with_verification(
@@ -267,10 +387,16 @@ def generate_with_verification(
             "refused": False,
         }
     )
+    result = final_state["result"]
+    refused = final_state["refused"]
+    # Claims are only meaningful for an accepted response — a refused one
+    # has no verified text to attach a citation to.
+    claims = extract_claims(result) if not refused and result is not None else []
     return VerifiedGenerationResult(
         text=final_state["final_text"],
-        refused=final_state["refused"],
+        refused=refused,
         attempts=final_state["attempt"],
         violations=final_state["violations"],
-        generation=final_state["result"],
+        generation=result,
+        claims=claims,
     )

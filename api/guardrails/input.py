@@ -67,6 +67,33 @@ _INJECTION_RE = re.compile(
 
 IN_SCOPE_BRANDS = frozenset({"volvo", "bmw", "mercedes", "mercedes-benz", "audi"})
 IN_SCOPE_MODELS = frozenset({"xc60", "ex30", "ex40", "xc90", "x3", "glc", "q5", "ix1"})
+# A raw customer objection, exactly as a consultant would actually hear it
+# and paste in, often names no brand or model at all — "A compact SUV will
+# not have enough storage," "The competitor offers more for the money."
+# Real gap found via live testing: 9 of the 28 objection-handling guide's
+# own literal customer-objection lines (docs/CORPUS.md) were wrongly
+# blocked here before ever reaching retrieval, despite a perfect matching
+# document existing underneath. These terms let a brand-less-but-clearly-
+# automotive query fall through to retrieval instead — an explicit
+# OUT_OF_SCOPE_BRANDS match still blocks regardless (Toyota/Honda/etc. stay
+# blocked even if the sentence also contains "SUV"), and genuinely
+# unrelated text ("write a birthday message for my dad") shares no
+# vocabulary with this set and still gets blocked here as before.
+_GENERIC_AUTOMOTIVE_TERMS = frozenset(
+    {
+        "compact suv",
+        "electric car",
+        "ev",
+        "range",
+        "charging",
+        "battery",
+        "storage",
+        "boot",
+        "competitor",
+        "brochure",
+        "specification",
+    }
+)
 OUT_OF_SCOPE_BRANDS = frozenset(
     {
         "toyota",
@@ -88,7 +115,12 @@ OUT_OF_SCOPE_BRANDS = frozenset(
         "jaguar",
         "porsche",
         "fortuner",
-        "city",
+        # "city" (Honda City) was deliberately removed — a real, seen
+        # collision found via live testing: "Does the XC60 have City
+        # Safety?" was wrongly blocked, since "city" alone matched inside a
+        # genuine Volvo feature name that has nothing to do with the Honda
+        # City. "honda" alone already catches every Honda City redteam case
+        # (evals/dataset/redteam.jsonl's rt_038) without this collision.
     }
 )
 
@@ -139,8 +171,10 @@ def _mentions_any(text_lower: str, terms: frozenset[str]) -> bool:
 
 def check_out_of_scope(text: str) -> InputGuardrailResult | None:
     text_lower = normalize_model_spacing(text.lower())
-    in_scope = _mentions_any(text_lower, IN_SCOPE_BRANDS) or _mentions_any(
-        text_lower, IN_SCOPE_MODELS
+    in_scope = (
+        _mentions_any(text_lower, IN_SCOPE_BRANDS)
+        or _mentions_any(text_lower, IN_SCOPE_MODELS)
+        or _mentions_any(text_lower, _GENERIC_AUTOMOTIVE_TERMS)
     )
     out_of_scope_brand = _mentions_any(text_lower, OUT_OF_SCOPE_BRANDS)
     if out_of_scope_brand or not in_scope:

@@ -26,8 +26,15 @@ This is a deliberate, documented gap: **"the EX30 has no direct German rival at 
 | BMW X3 product document | Word/PDF, reformatted | `data/sources/products/bmw/x3` |
 | Mercedes GLC product document | Word/PDF, reformatted | `data/sources/products/mercedes/glc` |
 | Audi Q5 product document | Word/PDF, reformatted | `data/sources/products/audi/q5` |
+| Volvo Objection Handling Guide | Word/PDF, **pre-chunked** — 28 numbered items, chunk IDs `EX30_001`–`GENERAL_029` (item 9 removed — it conflicted with the EX30 no-competitor scope decision above) | `data/sources/products/volvo/objection-handling` |
 
 Each document is self-contained: one model, dimensions, powertrain, and feature descriptions, in one file. Chunked and embedded per `docs/RETRIEVAL.md`. Every chunk carries `source_id NOT NULL`, enforced at the schema level — collapsing to one corpus type did not relax the citation discipline.
+
+**The objection handling guide is a different shape and must be ingested differently:**
+- It is **already chunked** — 28 numbered objection/response units. Do not run the semantic chunker on it. Split on the existing numbered boundaries exactly, one chunk per item, and store the given ID (`EX30_001`, `XC60_010`, `GENERAL_027`, etc.) as `chunks.external_id`.
+- It is **cross-referential** — items compare XC60 against X3, GLC, and Q5. It does not belong to a single brand folder the way the five per-model product documents do.
+- It gets **its own `sources` row** (`source_id = src_volvo_objection_guide`). Each item's internal "Supporting source" text (e.g. "EX30 brochure: Powertrain & Performance") is descriptive content inside the chunk, not a separate citation target — it does not point to a different `source_id` unless that underlying brochure is also independently ingested.
+- Items 13, 20, 21, 22, 23, 27, 29 are hand-written examples of correct refusal/concession behaviour. Promote them directly into `evals/dataset/concessions.jsonl` and `qa.jsonl` as ground truth, not just as retrieval content.
 
 **No document contains pricing or an itemized standard-vs-optional equipment breakdown.** Each brochure explicitly disclaims this ("exact standard/optional availability should be read [elsewhere]", "some equipment described/shown may only be available at extra cost" — no itemization). Equipped-price comparison (originally scoped as T2.4) was descoped for this reason: `no_answer_outside_corpus` refuses price and equipment-tier questions rather than the system fabricating figures the source documents never state. See `docs/PRD.md` §5 for this as a named scope decision.
 
@@ -59,6 +66,7 @@ This is not permanent. If NCAP or warranty data turns out to matter — e.g. con
 | X3 product doc | India | ✅ in scope |
 | GLC product doc | India | ✅ in scope |
 | Q5 product doc | India | ✅ in scope |
+| Objection handling guide (28 items) | India | ✅ in scope — pre-chunked, own source row, item 9 removed |
 | Service centre spreadsheet | India | ✅ in scope, separate structured source |
 | iX1 product doc | — | ❌ not sourced — EX30 has no competitor until fixed |
 | Euro NCAP, any model | — | ❌ descoped — refuse, don't answer from general knowledge |

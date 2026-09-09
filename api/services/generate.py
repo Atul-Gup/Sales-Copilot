@@ -47,6 +47,17 @@ reference chunks inline with their bracketed number, e.g. "[1]" — including a 
 value isn't stated anywhere: cite the chunk you checked and found it missing from, never state a \
 value or its absence with no marker at all. These markers are for verification, not something \
 the consultant reads aloud — they sit at the end of the sentence, not inside it.
+- If your answer has more than one sentence, EVERY sentence that states a number, figure, \
+spec, or feature drawn from a chunk needs its own marker at its own end — never one marker \
+saved for the end of the whole answer. A closing sentence with no number in it (a takeaway, a \
+summary) needs no marker of its own, but every sentence before it that does state a number does.
+- A response with zero "[n]" markers anywhere in it is always wrong and will be rejected, no \
+matter how short or simple the answer is — even a one-sentence answer needs its marker.
+- If a single sentence combines numbers that come from two different chunks (e.g. the engine \
+size from one chunk's overview line and the power/torque from another chunk's spec table), end \
+that sentence with every marker it draws from, back to back, e.g. "...370 Nm [2][6]" — not just \
+the last chunk you happened to use. A marker only covers numbers that literally appear in that \
+chunk's own text; leaving one out for a number it doesn't cover is the same as citing nothing.
 - Before writing a number, check whose chunk it actually came from. Multiple models in this \
 corpus share similar-looking sections and even identical figures for different specs — copying \
 a number into the wrong model's line is a real, seen failure mode. Re-read the chunk's own \
@@ -123,7 +134,10 @@ def _build_context_block(
     citations = []
     labels = model_labels or {}
     for marker, chunk in enumerate(chunks, start=1):
-        label = labels.get(chunk.document_id)
+        # document_id is nullable (a chunk with no single owning model,
+        # e.g. the objection-handling guide's General items) — there's no
+        # label to look up for one, same as an unrecognized id.
+        label = labels.get(chunk.document_id) if chunk.document_id is not None else None
         # The model name goes first, ahead of the section — most chunk text
         # is otherwise anonymous (a generic "3. Dimensions & Capacity" table
         # with no model name inside it at all), which is a real, confirmed
@@ -152,6 +166,7 @@ def generate(
     llm: LLMClient,
     model: str = "gpt-4o-mini",
     model_labels: dict[int, str] | None = None,
+    retry_feedback: str | None = None,
 ) -> GenerationResult:
     """Generate a natural-language response to `query` over `chunks`.
 
@@ -168,16 +183,41 @@ def generate(
     confirmed real cause of cross-model mislabeling. Optional and omittable
     (falls back to no label) so callers without a session handy — tests,
     mainly — aren't forced to build this map.
+
+    `retry_feedback`, when set, is appended to the prompt describing exactly
+    what verify_grounding's first attempt got wrong. Necessary because
+    `temperature=0.0` makes this call deterministic: without feedback, a
+    blind second attempt at the same prompt reproduces the same output
+    (and the same violation) every time, silently turning the
+    regenerate-once step into a no-op. Real bug found via live testing —
+    every objection-guide multi-sentence answer that missed a marker on
+    attempt 1 refused 100% of the time instead of self-correcting.
     """
     context_block, citations = _build_context_block(chunks, model_labels)
     system = f"{_SHARED_RULES}\n\n{_INTENT_GUIDANCE[intent]}"
     user_content = f"SOURCE CHUNKS:\n{context_block}\n\nQUESTION: {query}"
+    if retry_feedback:
+        user_content += (
+            f"\n\nYour previous answer was rejected for this reason: {retry_feedback}\n"
+            "Rewrite the answer from scratch, fixing that specific problem."
+        )
 
     result = llm.complete(
         [Message(role="user", content=user_content)],
         model=model,
         max_tokens=_MAX_TOKENS,
         system=system,
+        # Real bug found via live testing: with no temperature set (the API
+        # default, ~1.0), the model would sometimes state a correct, fully
+        # grounded figure but omit its `[n]` marker — a pure formatting
+        # miss, not a factual one — which verify_grounding (correctly)
+        # treats as an uncited claim and refuses after a second failure.
+        # Same query, asked twice, could get a citation once and a false
+        # refusal once. There's no benefit to stylistic variety here — the
+        # shared rules already mandate copying figures verbatim — so a low
+        # temperature trades away creativity this task never needed for
+        # much more reliable format compliance.
+        temperature=0.0,
     )
 
     return GenerationResult(

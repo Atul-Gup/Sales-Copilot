@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from api.models import Base, Chunk, Model
 from api.services import pipeline
+from api.services.concede import ConcessionResult
 from api.services.generate import GenerationResult
 from api.services.retrieve import ScoredChunk
 from api.services.router import QueryType
@@ -94,6 +95,7 @@ def test_answer_force_refuses_framing_pressure_before_any_retrieval(
     )
 
     assert result.refused is True
+    assert result.refusal_reason == "no_answer_outside_corpus"
     assert "XC60" in result.text
 
 
@@ -113,6 +115,7 @@ def test_answer_refuses_below_threshold(monkeypatch: pytest.MonkeyPatch) -> None
     result = pipeline.answer("safety rating for the XC60?", session=object(), llm=object())  # type: ignore[arg-type]
 
     assert result.refused is True
+    assert result.refusal_reason == "no_answer_outside_corpus"
     assert result.conceded is False
     assert result.verification is None
     assert "XC60" in result.text
@@ -126,6 +129,7 @@ def test_answer_refuses_when_nothing_is_retrieved(monkeypatch: pytest.MonkeyPatc
         llm=object(),  # type: ignore[arg-type]
     )
     assert result.refused is True
+    assert result.refusal_reason == "no_answer_outside_corpus"
     assert result.top_score == 0.0
 
 
@@ -179,6 +183,39 @@ def test_answer_generates_above_threshold(monkeypatch: pytest.MonkeyPatch) -> No
     assert captured["chunks"] == [chunk]
 
 
+def test_answer_tags_a_refused_verification_as_grounding_violation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chunk = _chunk(1, "Boot space is 709 litres.")
+    monkeypatch.setattr(
+        pipeline,
+        "hybrid_search_scored",
+        lambda query, session: [ScoredChunk(chunk=chunk, score=0.5)],
+    )
+    refused_outcome = VerifiedGenerationResult(
+        text="I can't verify this against the sourced documents closely enough.",
+        refused=True,
+        attempts=2,
+        violations=[],
+        generation=None,
+    )
+    monkeypatch.setattr(pipeline, "generate_with_verification", lambda *a, **k: refused_outcome)
+    monkeypatch.setattr(pipeline, "_known_volvo_service_cities", lambda session: frozenset())
+    monkeypatch.setattr(pipeline, "_model_labels", lambda session, chunks: {})
+
+    result = pipeline.answer(
+        "boot space of the XC60?",
+        session=object(),  # type: ignore[arg-type]
+        llm=object(),  # type: ignore[arg-type]
+    )
+
+    assert result.refused is True
+    # Distinct from no_answer_outside_corpus: the corpus had something
+    # (top_score cleared the gate) but generation couldn't produce a
+    # verifiably grounded answer from it — a different failure mode.
+    assert result.refusal_reason == "grounding_violation"
+
+
 def test_answer_concedes_a_known_weakness_objection_without_retrieving(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -186,7 +223,11 @@ def test_answer_concedes_a_known_weakness_objection_without_retrieving(
         raise AssertionError("retrieval must not run for a conceded objection")
 
     monkeypatch.setattr(pipeline, "hybrid_search_scored", _fail_if_called)
-    monkeypatch.setattr(pipeline, "concede", lambda query, session: "Conceded response.")
+    monkeypatch.setattr(
+        pipeline,
+        "concede",
+        lambda query, session: ConcessionResult(text="Conceded response.", is_weakness=True),
+    )
 
     result = pipeline.answer(
         "My customer heard that Volvo's resale value is bad.",
@@ -199,6 +240,35 @@ def test_answer_concedes_a_known_weakness_objection_without_retrieving(
     assert result.text == "Conceded response."
     assert result.intent == QueryType.OBJECTION
     assert result.verification is None
+
+
+def test_answer_does_not_badge_a_favourable_service_network_answer_as_conceded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Real live bug: concede() can return a real, data-backed answer that
+    # actually favours Volvo (is_weakness=False) — pipeline.answer must not
+    # force `conceded=True` in that case regardless of the category match.
+    def _fail_if_called(*args: object, **kwargs: object) -> None:
+        raise AssertionError("retrieval must not run for a conceded objection")
+
+    monkeypatch.setattr(pipeline, "hybrid_search_scored", _fail_if_called)
+    monkeypatch.setattr(
+        pipeline,
+        "concede",
+        lambda query, session: ConcessionResult(
+            text="By the numbers we have (Volvo: 5, BMW: 2 centres) ...", is_weakness=False
+        ),
+    )
+
+    result = pipeline.answer(
+        "BMW has more service centres than Volvo, right?",
+        session=object(),  # type: ignore[arg-type]
+        llm=object(),  # type: ignore[arg-type]
+    )
+
+    assert result.conceded is False
+    assert result.refused is False
+    assert "Volvo: 5" in result.text
 
 
 def test_answer_blocks_out_of_scope_query_before_any_retrieval(
@@ -217,6 +287,7 @@ def test_answer_blocks_out_of_scope_query_before_any_retrieval(
     )
 
     assert result.refused is True
+    assert result.refusal_reason == "no_answer_outside_corpus"
     assert result.conceded is False
     assert result.intent is None
     assert result.blocked_by_input_guardrail == "out_of_scope"
@@ -236,6 +307,9 @@ def test_answer_blocks_customer_facing_draft_request(monkeypatch: pytest.MonkeyP
 
     assert result.blocked_by_input_guardrail == "customer_facing"
     assert result.refused is True
+    # customer_facing is a policy block, not a "the corpus has nothing on
+    # this" case — deliberately not tagged no_answer_outside_corpus.
+    assert result.refusal_reason is None
 
 
 def test_answer_uses_sanitized_text_after_prompt_injection_is_stripped(

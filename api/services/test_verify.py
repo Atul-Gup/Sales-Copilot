@@ -5,6 +5,8 @@ from api.services.router import QueryType
 from api.services.verify import (
     MAX_ATTEMPTS,
     REFUSAL_TEXT,
+    Claim,
+    extract_claims,
     find_grounding_violations,
     generate_with_verification,
 )
@@ -94,6 +96,67 @@ def test_find_grounding_violations_ignores_non_numeric_claims() -> None:
     citations = [Citation(marker=1, chunk_id=1, section=None, text="Available in five colours.")]
     result = _result("Several exterior colours are available [1].", citations)
     assert find_grounding_violations(result) == []
+
+
+def test_extract_claims_pairs_each_cited_sentence_with_its_chunk_and_source() -> None:
+    citations = [
+        Citation(
+            marker=1,
+            chunk_id=42,
+            section="Dimensions",
+            text="Boot space is 709 litres.",
+            model_label="Volvo XC60",
+        )
+    ]
+    result = _result("Boot space is 709 litres [1].", citations)
+    claims = extract_claims(result)
+    assert claims == [
+        Claim(
+            text_span="Boot space is 709 litres [1].",
+            chunk_id=42,
+            source="Volvo XC60 — Dimensions",
+        )
+    ]
+
+
+def test_extract_claims_falls_back_to_a_generic_source_label() -> None:
+    # No model_label (chunk's document couldn't be resolved) and no section
+    # — still produces a claim, just with a plain fallback source string
+    # rather than failing or omitting it.
+    citations = [Citation(marker=1, chunk_id=7, section=None, text="Available in five colours.")]
+    result = _result("Several exterior colours are available [1].", citations)
+    claims = extract_claims(result)
+    assert len(claims) == 1
+    assert claims[0].chunk_id == 7
+    assert claims[0].source == "source document"
+
+
+def test_extract_claims_splits_one_sentence_citing_two_markers_into_two_claims() -> None:
+    citations = [
+        Citation(marker=1, chunk_id=1, section="Powertrain", text="343 Nm."),
+        Citation(marker=2, chunk_id=2, section="Powertrain", text="343 Nm confirmed."),
+    ]
+    result = _result("Torque is 343 Nm [1][2].", citations)
+    claims = extract_claims(result)
+    assert [c.chunk_id for c in claims] == [1, 2]
+    assert all(c.text_span == "Torque is 343 Nm [1][2]." for c in claims)
+
+
+def test_extract_claims_skips_a_fabricated_marker_not_offered_to_the_model() -> None:
+    # find_grounding_violations already flags this case as a violation
+    # (test_find_grounding_violations_flags_a_fabricated_marker above) — a
+    # response with a fabricated marker never reaches accept, so this just
+    # confirms extract_claims itself doesn't crash or invent a claim for it.
+    result = _result("The XC60 has 709 litres [3].", [])
+    assert extract_claims(result) == []
+
+
+def test_extract_claims_ignores_claims_with_no_citation_marker_at_all() -> None:
+    citations = [Citation(marker=1, chunk_id=1, section=None, text="709 litres.")]
+    result = _result("Boot space is 709 litres [1]. This is a spacious SUV overall.", citations)
+    claims = extract_claims(result)
+    assert len(claims) == 1
+    assert claims[0].text_span == "Boot space is 709 litres [1]."
 
 
 def test_generate_with_verification_accepts_a_clean_first_attempt() -> None:

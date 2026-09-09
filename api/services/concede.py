@@ -34,11 +34,28 @@ proximity claim.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from enum import StrEnum
 
 from sqlalchemy.orm import Session
 
 from api.models import CityAlias, ServiceCentre
+
+# Topics docs/CORPUS.md guarantees are absent from every ingested document,
+# for every model — shared with pipeline.py's framing-pressure override
+# (imported from here, not duplicated, so the two never drift apart).
+# Checked first in `detect_known_weakness`, below: a real live bug had "bmw
+# service warranty is better than volvo?" match SERVICE_NETWORK purely on
+# the bare word "service" in "service warranty", and answer with unrelated
+# service-*centre* count data — a completely different topic (warranty)
+# wearing the same word. Any query naming one of these permanently-out-of-
+# corpus topics must fall through to normal retrieval/refusal instead of
+# being intercepted by a category that was never about it.
+NEVER_INGESTED_TOPIC_RE = re.compile(
+    r"\beuro\s*ncap\b|\bcrash test\b|\bstar rating\b|\bsafety rating\b|"
+    r"\bwarranty\b|\bservice plan\b|\bmaintenance package\b",
+    re.IGNORECASE,
+)
 
 _SERVICE_NETWORK_PATTERNS = [
     r"\bservice\b",
@@ -90,6 +107,25 @@ class ConcessionCategory(StrEnum):
     EX30_PRICE_CLASS_GAP = "ex30_price_class_gap"
 
 
+@dataclass(frozen=True)
+class ConcessionResult:
+    """`is_weakness` is the real fix for a live bug report: a
+    service-network question was always badged "Honest Concession" / "a
+    known Volvo weakness" even when the actual ingested counts show Volvo
+    *ahead* of the named brand (e.g. Volvo: 5 centres vs. BMW: 2) — the old
+    code treated "this query matched the service_network category" and
+    "this answer concedes a weakness" as the same thing, when they aren't:
+    resale_value and ex30_price_class_gap are unconditional real gaps (no
+    document exists, full stop), but a service-network comparison is
+    data-dependent and can come out either way depending on which brand and
+    city are actually named. `text` is always the same honest, data-backed
+    answer either way — only whether it's *framed* as a concession changes.
+    """
+
+    text: str
+    is_weakness: bool
+
+
 def _matches_any(patterns: list[str], text: str) -> bool:
     return any(re.search(p, text) for p in patterns)
 
@@ -98,7 +134,17 @@ def detect_known_weakness(query: str) -> ConcessionCategory | None:
     """Classify a customer objection into one of the three documented
     known-weakness categories, or None if it isn't one of these — a plain
     query gets no special handling here and falls through to normal
-    generation."""
+    generation.
+
+    Checked first, before any category: a query naming a permanently
+    out-of-corpus topic (warranty, Euro NCAP, ...) never matches a
+    known-weakness category, even if it also happens to contain a word one
+    of them keys on (e.g. "service" in "service warranty") — see
+    `NEVER_INGESTED_TOPIC_RE`'s docstring for the real bug this prevents.
+    """
+    if NEVER_INGESTED_TOPIC_RE.search(query):
+        return None
+
     text = query.lower()
 
     if "ex30" in text and _matches_any(_EX30_GAP_PATTERNS, text):
@@ -134,15 +180,15 @@ def _extract_brand(text: str) -> str | None:
     return None
 
 
-def concede_resale_value(_query: str) -> str:
-    return RESALE_CONCESSION
+def concede_resale_value(_query: str) -> ConcessionResult:
+    return ConcessionResult(text=RESALE_CONCESSION, is_weakness=True)
 
 
-def concede_ex30_price_class_gap(_query: str) -> str:
-    return EX30_PRICE_CLASS_GAP_CONCESSION
+def concede_ex30_price_class_gap(_query: str) -> ConcessionResult:
+    return ConcessionResult(text=EX30_PRICE_CLASS_GAP_CONCESSION, is_weakness=True)
 
 
-def concede_service_network(query: str, session: Session) -> str:
+def concede_service_network(query: str, session: Session) -> ConcessionResult:
     text = query.lower()
     known_cities = _known_cities(session)
     city = _extract_city(text, known_cities)
@@ -160,12 +206,15 @@ def concede_service_network(query: str, session: Session) -> str:
         ]
         volvo_here = city in volvo_cities
         if brands_here and not volvo_here:
-            return (
-                f"That's accurate — {', '.join(brands_here)} has a service centre in "
-                f"{city} and Volvo doesn't currently list one there. Volvo's listed "
-                f"centres in our data are: {', '.join(volvo_cities)}. Worth checking "
-                "with the customer which of those is workable, rather than promising "
-                "coverage that isn't there."
+            return ConcessionResult(
+                text=(
+                    f"That's accurate — {', '.join(brands_here)} has a service centre in "
+                    f"{city} and Volvo doesn't currently list one there. Volvo's listed "
+                    f"centres in our data are: {', '.join(volvo_cities)}. Worth checking "
+                    "with the customer which of those is workable, rather than promising "
+                    "coverage that isn't there."
+                ),
+                is_weakness=True,
             )
 
     brands_to_compare = [named_brand] if named_brand else _OTHER_BRANDS
@@ -189,10 +238,18 @@ def concede_service_network(query: str, session: Session) -> str:
         else "the counts are close in this data."
     )
 
-    return f"By the numbers we have ({breakdown} centres), {verdict}"
+    # Only a real weakness (Volvo actually trails someone) earns the
+    # must_concede framing — a query that happens to match the
+    # service_network category but where the real numbers favour or tie
+    # Volvo is just an honest fact-check, not a concession. See
+    # ConcessionResult's docstring for the live bug this fixes.
+    return ConcessionResult(
+        text=f"By the numbers we have ({breakdown} centres), {verdict}",
+        is_weakness=bool(behind),
+    )
 
 
-def concede(query: str, session: Session) -> str | None:
+def concede(query: str, session: Session) -> ConcessionResult | None:
     """Dispatch to the right concession, or None if this query isn't a
     known-weakness objection — the caller should fall through to normal
     generation in that case."""
