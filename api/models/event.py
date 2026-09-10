@@ -38,3 +38,20 @@ class QueryEvent(Base):
     top_score: Mapped[float] = mapped_column(Float, nullable=False)
     latency_ms: Mapped[float] = mapped_column(Float, nullable=False)
     cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Why the answer was refused, mirroring AnswerResult.refusal_reason
+    # (api/services/pipeline.py): "no_answer_outside_corpus" (nothing to
+    # generate from) vs "grounding_violation" (generation ran but couldn't
+    # produce a verifiably-cited answer) are different failure modes with
+    # different fixes, so the dashboard needs to tell them apart rather than
+    # lumping every refusal into one rate. Null when not refused.
+    refusal_reason: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Whether verify_grounding's *first* generation attempt had an uncited
+    # or wrong-chunk claim, whether or not the second attempt then fixed it
+    # or the query was ultimately refused. By construction (verify.py's
+    # regenerate-once-then-refuse loop), an *accepted* response can never
+    # itself carry a violation — so this is the only place a genuine
+    # hallucination/miscitation rate can be measured at all; a rate computed
+    # over accepted responses alone would always read 0%. Null when no
+    # generation happened this call (blocked, refused pre-retrieval, or
+    # conceded) — there was no attempt to have a violation.
+    first_attempt_had_violation: Mapped[bool | None] = mapped_column(Boolean, nullable=True)

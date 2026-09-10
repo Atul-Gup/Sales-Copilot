@@ -2,12 +2,16 @@
 
 A one-off, idempotent schema-and-corpus provisioning call, not a general
 admin surface: creates the `vector` extension and current schema if missing,
-then ingests the real product documents and service centres — but only if
-`sources` is empty, so calling it again after the corpus is already loaded
-is a safe no-op rather than a re-embed. This exists because the deployed
-API is the only thing that can reach the database's internal hostname
-(Railway's private network) — there is no local/external path to run
-migrations or ingestion against it directly.
+then ingests the real product documents, service centres, and the
+objection-handling guide — each checked and skipped independently rather
+than one blanket "any sources exist" gate, so calling this again after the
+five product documents are already loaded still ingests the objection guide
+if that hasn't happened yet (real gap found live: the original blanket gate
+would have silently skipped the objection guide forever on a database that
+already had the five product documents from an earlier deploy). This exists
+because the deployed API is the only thing that can reach the database's
+internal hostname (Railway's private network) — there is no local/external
+path to run migrations or ingestion against it directly.
 
 Also the way to stand up a local dev database: run the API with
 `DATABASE_URL=sqlite:///./dev.db` (see `.env.example`) and call this
@@ -31,6 +35,8 @@ from sqlalchemy import text
 from api.db import SessionLocal, engine
 from api.models import Base, QueryEvent, Source
 from api.settings import settings
+from ingest.objection_guide import DOCUMENT_TITLE as OBJECTION_GUIDE_TITLE
+from ingest.objection_guide import run as ingest_objection_guide
 from ingest.product_docs import run as ingest_product_docs
 from ingest.service_centres import run as ingest_service_centres
 
@@ -53,19 +59,34 @@ def admin_ingest(x_admin_token: str | None = Header(default=None)) -> dict[str, 
 
     with SessionLocal() as session:
         existing = session.query(Source).count()
-        if existing > 0:
-            return {"status": "skipped", "reason": "already ingested", "source_count": existing}
+        product_reports: list[Any] = []
+        if existing == 0:
+            product_reports = ingest_product_docs(session)
+            ingest_service_centres(session)
+            session.commit()
 
-        product_reports = ingest_product_docs(session)
-        ingest_service_centres(session)
-        session.commit()
+        objection_guide_status = "skipped"
+        objection_guide_result: dict[str, Any] = {}
+        has_objection_guide = (
+            session.query(Source).filter_by(document_title=OBJECTION_GUIDE_TITLE).first()
+            is not None
+        )
+        if not has_objection_guide:
+            report = ingest_objection_guide(session)
+            session.commit()
+            objection_guide_status = "ok"
+            objection_guide_result = {
+                "chunk_count": report.chunk_count,
+                "malformed_external_ids": report.malformed_external_ids,
+            }
 
     return {
-        "status": "ok",
+        "status": "ok" if existing == 0 else "product_docs_already_ingested",
         "product_documents": [
             {"document_title": r.document_title, "chunk_count": r.chunk_count, "error": r.error}
             for r in product_reports
         ],
+        "objection_guide": {"status": objection_guide_status, **objection_guide_result},
     }
 
 
@@ -101,6 +122,14 @@ def _aggregate_metrics(events: list[QueryEvent]) -> dict[str, Any]:
     total = len(events)
     refused = sum(1 for e in events if e.refused)
     conceded = sum(1 for e in events if e.conceded)
+    grounding_refused = sum(1 for e in events if e.refusal_reason == "grounding_violation")
+    # Denominator is "queries that actually reached generation" (i.e. where
+    # first_attempt_had_violation isn't null), not every query — a blocked,
+    # pre-retrieval-refused, or conceded query never ran generate() at all,
+    # so it's neither hallucinated nor not-hallucinated, and folding it into
+    # the denominator would understate the rate as usage of those paths grows.
+    generated = [e for e in events if e.first_attempt_had_violation is not None]
+    first_attempt_violations = sum(1 for e in generated if e.first_attempt_had_violation)
 
     by_intent: dict[str, int] = {}
     for e in events:
@@ -128,6 +157,22 @@ def _aggregate_metrics(events: list[QueryEvent]) -> dict[str, Any]:
             "n": total,
             "refusal_rate": refused / total if total else 0.0,
             "concession_rate": conceded / total if total else 0.0,
+            # "how often does the model hallucinate/miscite at all" — over
+            # queries that reached generation, regardless of whether a
+            # second attempt then fixed it or the query was refused. An
+            # accepted response can never itself carry a violation (verify_
+            # grounding forces zero before accepting), so this is the only
+            # place a real hallucination rate can be measured; see
+            # api/models/event.py::first_attempt_had_violation.
+            "first_attempt_hallucination_rate": (
+                first_attempt_violations / len(generated) if generated else 0.0
+            ),
+            "generated_n": len(generated),
+            # "how often does a hallucination actually reach the user as a
+            # refusal" — a strict subset of refusal_rate, broken out by
+            # cause rather than lumped in with no_answer_outside_corpus
+            # refusals (a different failure mode with a different fix).
+            "hallucination_refusal_rate": grounding_refused / total if total else 0.0,
         },
         "by_intent": by_intent,
         "daily": daily,
@@ -235,9 +280,12 @@ footer code{ font-family:"IBM Plex Mono",monospace; }
   <header>
     <span class="eyebrow">Showroom Copilot &middot; Internal</span>
     <h1>Live Metrics</h1>
-    <p class="subtitle">Real query volume, refusal rate, and concession rate from
-      <span class="mono">query_events</span> — every <span class="mono">POST /chat</span> call,
-      as it happens. Never the query or response text itself, only the classification.</p>
+    <p class="subtitle">Real query volume, refusal rate, concession rate, and hallucination rate
+      from <span class="mono">query_events</span> — every <span class="mono">POST /chat</span>
+      call, as it happens. Never the query or response text itself, only the classification.
+      "Hallucination rate" is the model's first draft, before verify_grounding's regenerate-once
+      check — an accepted answer can never itself carry one by construction, so this is measured
+      on the attempt, not the response the consultant actually saw.</p>
   </header>
 
   <div id="error"></div>
@@ -297,6 +345,12 @@ function renderKpis(totals, dailyCost) {
     <div class="kpi"><span class="label">Concession rate</span>
       <span class="value" style="color:var(--accent);">${fmtPct(totals.concession_rate)}</span>
       <span class="sub">honest-weakness objections</span></div>
+    <div class="kpi"><span class="label">Hallucination rate</span>
+      <span class="value" style="color:var(--warn);">${fmtPct(totals.first_attempt_hallucination_rate)}</span>
+      <span class="sub">first draft uncited/miscited, of ${totals.generated_n} generated</span></div>
+    <div class="kpi"><span class="label">Hallucination &rarr; refusal</span>
+      <span class="value" style="color:var(--bad);">${fmtPct(totals.hallucination_refusal_rate)}</span>
+      <span class="sub">reached the user as a refusal, of all queries</span></div>
     <div class="kpi"><span class="label">Est. cost</span>
       <span class="value">$${dailyCost.toFixed(4)}</span><span class="sub">all time, LLM calls</span></div>
   `;

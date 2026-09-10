@@ -202,6 +202,14 @@ def answer(
         else None
     )
     intent_value = result.intent.value if result.intent is not None else None
+    # verify_grounding only regenerates when attempt 1 had a violation (see
+    # its _route_after_verify), so attempts > 1 is an exact proxy for "the
+    # first draft hallucinated/miscited something" — the final `violations`
+    # list alone can't tell us this, since it reflects whichever attempt
+    # (1 or 2) actually produced `final_text`, not attempt 1 specifically.
+    first_attempt_had_violation = (
+        result.verification.attempts > 1 if result.verification is not None else None
+    )
 
     logger.info(
         "chat_answer",
@@ -209,6 +217,8 @@ def answer(
         refused=result.refused,
         conceded=result.conceded,
         blocked_by_input_guardrail=result.blocked_by_input_guardrail,
+        refusal_reason=result.refusal_reason,
+        first_attempt_had_violation=first_attempt_had_violation,
         top_score=result.top_score,
         latency_ms=latency_ms,
         cost_usd=cost_usd,
@@ -223,6 +233,8 @@ def answer(
                 refused=result.refused,
                 conceded=result.conceded,
                 blocked_by_input_guardrail=result.blocked_by_input_guardrail,
+                refusal_reason=result.refusal_reason,
+                first_attempt_had_violation=first_attempt_had_violation,
                 top_score=result.top_score,
                 latency_ms=latency_ms,
                 cost_usd=cost_usd,
