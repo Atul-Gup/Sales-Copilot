@@ -7,7 +7,9 @@ documents, and it is built to **refuse plainly rather than guess** whenever the 
 support an answer. Portfolio project, unaffiliated with Volvo Cars.
 
 Live: `https://showroom-copilot-api-production.up.railway.app` (API) ·
-`https://web-five-eosin-56.vercel.app` (web)
+`https://web-five-eosin-56.vercel.app` (web) ·
+`https://showroom-copilot-api-production.up.railway.app/admin/dashboard` (live metrics — needs
+the admin token, not included here; see `?token=` or the on-page prompt)
 
 See `EVALS.md` for results and `SECURITY.md` for red-team results, both versioned and both
 reporting known gaps, not just wins.
