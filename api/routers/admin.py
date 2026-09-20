@@ -233,9 +233,32 @@ h1{ font-size:1.6rem; font-weight:700; margin:0; text-wrap:balance; letter-spaci
   background:var(--border); border:1px solid var(--border); border-radius:10px; overflow:hidden;
   box-shadow:var(--shadow); }
 .kpi{ background:var(--surface); padding:1.05rem 1.15rem; display:flex; flex-direction:column; gap:0.35rem; }
-.kpi .label{ font-size:0.7rem; letter-spacing:0.04em; text-transform:uppercase; color:var(--text-faint); font-weight:600; }
+.kpi .label{ font-size:0.7rem; letter-spacing:0.04em; text-transform:uppercase; color:var(--text-faint);
+  font-weight:600; display:flex; align-items:center; gap:0.32rem; }
 .kpi .value{ font-family:"IBM Plex Mono",monospace; font-size:1.55rem; font-weight:600; letter-spacing:-0.01em; }
 .kpi .sub{ font-size:0.76rem; color:var(--text-dim); }
+
+.info-badge{
+  position:relative; display:inline-flex; align-items:center; justify-content:center;
+  width:13px; height:13px; border-radius:50%; background:var(--surface-2); color:var(--text-faint);
+  font-family:"IBM Plex Mono",monospace; font-size:0.62rem; font-weight:700; line-height:1;
+  text-transform:none; letter-spacing:0; cursor:help; flex:none;
+}
+.info-badge .tooltip{
+  position:absolute; top:calc(100% + 7px); left:50%; transform:translateX(-50%);
+  width:220px; background:var(--text); color:var(--surface);
+  font-family:"IBM Plex Sans", sans-serif; font-size:0.74rem; font-weight:400; line-height:1.4;
+  letter-spacing:0; text-transform:none; padding:0.5rem 0.65rem; border-radius:7px;
+  box-shadow:var(--shadow); opacity:0; visibility:hidden; transition:opacity 0.12s ease;
+  pointer-events:none; z-index:10; text-align:left;
+}
+.info-badge .tooltip::after{
+  content:""; position:absolute; bottom:100%; left:50%; transform:translateX(-50%);
+  border:5px solid transparent; border-bottom-color:var(--text);
+}
+.info-badge:hover .tooltip, .info-badge:focus .tooltip, .info-badge:focus-visible .tooltip{
+  opacity:1; visibility:visible;
+}
 
 .panel{ background:var(--surface); border:1px solid var(--border); border-radius:10px;
   padding:1.25rem 1.35rem; box-shadow:var(--shadow); }
@@ -334,24 +357,34 @@ footer code{ font-family:"IBM Plex Mono",monospace; }
 function fmtPct(x) { return (x * 100).toFixed(1) + "%"; }
 function esc(s) { return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 
+function infoBadge(text) {
+  return `<span class="info-badge" tabindex="0">i<span class="tooltip">${esc(text)}</span></span>`;
+}
+
 function renderKpis(totals, dailyCost) {
   const grid = document.getElementById("kpi-grid");
   grid.innerHTML = `
-    <div class="kpi"><span class="label">Total queries</span>
+    <div class="kpi"><span class="label">Total queries
+      ${infoBadge("Every call to POST /chat, across every outcome — answered, refused, or conceded.")}</span>
       <span class="value">${totals.n}</span><span class="sub">all time</span></div>
-    <div class="kpi"><span class="label">Refusal rate</span>
+    <div class="kpi"><span class="label">Refusal rate
+      ${infoBadge("Share of all queries the system declined to answer rather than risk a guess — either blocked before retrieval (out of scope) or refused after generation couldn't produce a verifiably grounded answer.")}</span>
       <span class="value" style="color:var(--bad);">${fmtPct(totals.refusal_rate)}</span>
       <span class="sub">of all queries</span></div>
-    <div class="kpi"><span class="label">Concession rate</span>
+    <div class="kpi"><span class="label">Concession rate
+      ${infoBadge("Share of all queries answered as an honest, known-weakness concession (e.g. a real service-network gap) from structured data, not generated narration.")}</span>
       <span class="value" style="color:var(--accent);">${fmtPct(totals.concession_rate)}</span>
       <span class="sub">honest-weakness objections</span></div>
-    <div class="kpi"><span class="label">Hallucination rate</span>
+    <div class="kpi"><span class="label">Hallucination rate
+      ${infoBadge("Of queries that reached generation, how often the model's first draft had an uncited or wrong-chunk claim — whether or not a second attempt then fixed it. Measured on the first attempt: an accepted response can never itself carry a violation by design, so this is the only place a real hallucination rate is measurable at all.")}</span>
       <span class="value" style="color:var(--warn);">${fmtPct(totals.first_attempt_hallucination_rate)}</span>
       <span class="sub">first draft uncited/miscited, of ${totals.generated_n} generated</span></div>
-    <div class="kpi"><span class="label">Hallucination &rarr; refusal</span>
+    <div class="kpi"><span class="label">Hallucination &rarr; refusal
+      ${infoBadge("Of all queries, how often a hallucination survived both generation attempts and reached the user as a refusal, instead of being silently caught and corrected on retry.")}</span>
       <span class="value" style="color:var(--bad);">${fmtPct(totals.hallucination_refusal_rate)}</span>
       <span class="sub">reached the user as a refusal, of all queries</span></div>
-    <div class="kpi"><span class="label">Est. cost</span>
+    <div class="kpi"><span class="label">Est. cost
+      ${infoBadge("Total OpenAI API spend (embedding + LLM calls) across every logged query, all time.")}</span>
       <span class="value">$${dailyCost.toFixed(4)}</span><span class="sub">all time, LLM calls</span></div>
   `;
 }
